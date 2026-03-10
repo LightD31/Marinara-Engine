@@ -182,7 +182,7 @@ export function RoleplayHUD({ chatId, characterCount, layout = "top" }: Roleplay
     <div className={cn("rpg-hud pointer-events-none relative z-30", isVertical && "h-full")}>
       <div
         className={cn(
-          "pointer-events-auto",
+          "pointer-events-none",
           isVertical
             ? cn(
                 "flex h-full flex-col flex-wrap gap-1.5 px-1.5 py-3",
@@ -195,7 +195,7 @@ export function RoleplayHUD({ chatId, characterCount, layout = "top" }: Roleplay
         {/* In top mode, these are inside a flex-wrap row container.
             In vertical mode, they're direct children so flex-col flex-wrap on the parent handles column reflow. */}
         {!isVertical && (
-          <div className="rpg-hud flex flex-wrap items-center gap-1.5">
+          <div className="rpg-hud pointer-events-none flex flex-wrap items-center gap-1.5">
             {/* World State */}
             {enabledAgentTypes.has("world-state") && (
               <>
@@ -231,7 +231,7 @@ export function RoleplayHUD({ chatId, characterCount, layout = "top" }: Roleplay
 
         {/* Actions — top mode: pushed to the right edge */}
         {!isVertical && (
-          <div className="ml-auto">
+          <div className="ml-auto pointer-events-none">
             <ActionsGroup
               isVertical={false}
               agentsOpen={agentsOpen}
@@ -246,8 +246,8 @@ export function RoleplayHUD({ chatId, characterCount, layout = "top" }: Roleplay
           </div>
         )}
 
-        {/* ── Actions before widgets when right-aligned (so they land in the overflow column toward screen center) ── */}
-        {isVertical && layout === "right" && (
+        {/* ── Actions before widgets in vertical mode (always first from the top) ── */}
+        {isVertical && (
           <ActionsGroup
             isVertical
             agentsOpen={agentsOpen}
@@ -295,21 +295,6 @@ export function RoleplayHUD({ chatId, characterCount, layout = "top" }: Roleplay
             )}
           </>
         )}
-
-        {/* ── Actions after widgets when left-aligned ── */}
-        {isVertical && layout === "left" && (
-          <ActionsGroup
-            isVertical
-            agentsOpen={agentsOpen}
-            setAgentsOpen={setAgentsOpen}
-            isAgentProcessing={isAgentProcessing}
-            thoughtBubbles={thoughtBubbles}
-            clearThoughtBubbles={clearThoughtBubbles}
-            dismissThoughtBubble={dismissThoughtBubble}
-            enabledAgentTypes={enabledAgentTypes}
-            clearGameState={clearGameState}
-          />
-        )}
       </div>
     </div>
   );
@@ -343,7 +328,7 @@ function ActionsGroup({
   clearGameState,
 }: ActionsGroupProps) {
   return (
-    <div className={cn("flex gap-1.5", isVertical ? "flex-col items-center" : "items-center")}>
+    <div className={cn("pointer-events-auto flex gap-1.5", isVertical ? "flex-col items-center" : "items-center")}>
       {/* Agents */}
       <div className="relative">
         <button
@@ -624,7 +609,7 @@ function CharactersWidget({
             <Users size={14} className="text-purple-400/50" />
           )}
         </div>
-        <span className="text-[9px] font-semibold leading-tight shrink-0">
+        <span className="max-w-full truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0">
           {characters.length > 0 ? `${characters.length} char${characters.length !== 1 ? "s" : ""}` : "Chars"}
         </span>
       </button>
@@ -803,7 +788,9 @@ function PersonaStatsWidget({ bars, onUpdate }: { bars: CharacterStat[]; onUpdat
           })}
           {bars.length > 3 && <div className="text-[7px] text-white/30 text-center">+{bars.length - 3}</div>}
         </div>
-        <span className="text-[9px] font-semibold leading-tight shrink-0">Persona</span>
+        <span className="max-w-full truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0">
+          Persona
+        </span>
       </button>
 
       <WidgetPopover open={open} onClose={() => setOpen(false)} className="w-60 max-h-80 overflow-y-auto left-0">
@@ -856,7 +843,7 @@ function InventoryWidget({ items, onUpdate }: { items: InventoryItem[]; onUpdate
           <Package size={14} className="text-amber-400/60" />
           {items.length > 0 && <span className="ml-0.5 text-sm font-bold text-amber-300/80">{items.length}</span>}
         </div>
-        <span className="text-[9px] font-semibold leading-tight shrink-0">
+        <span className="max-w-full truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0">
           {items.length > 0 ? `${items.length} item${items.length !== 1 ? "s" : ""}` : "Inventory"}
         </span>
       </button>
@@ -946,7 +933,7 @@ function QuestsWidget({ quests, onUpdate }: { quests: QuestProgress[]; onUpdate:
         <div className="flex h-7 items-center justify-center shrink-0">
           <Scroll size={14} className="text-emerald-400/60" />
         </div>
-        <span className="max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0">
+        <span className="max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0">
           {mainQuest ? mainQuest.name : `${quests.length} quest${quests.length !== 1 ? "s" : ""}`}
         </span>
       </button>
@@ -1090,9 +1077,9 @@ function LabeledEdit({ label, value, onSave }: { label: string; value: string; o
 // ═══════════════════════════════════════════════
 
 const WIDGET =
-  "group flex w-20 h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl border bg-black/40 backdrop-blur-md transition-all hover:bg-black/60 cursor-pointer select-none overflow-hidden";
+  "group pointer-events-auto flex w-20 h-[3.75rem] max-md:w-14 max-md:h-11 flex-col items-center justify-center gap-0.5 rounded-xl border bg-black/40 backdrop-blur-md transition-all hover:bg-black/60 cursor-pointer select-none overflow-hidden";
 const WIDGET_EDIT =
-  "flex w-20 h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl border bg-black/60 backdrop-blur-md overflow-hidden";
+  "pointer-events-auto flex w-20 h-[3.75rem] max-md:w-14 max-md:h-11 flex-col items-center justify-center gap-0.5 rounded-xl border bg-black/60 backdrop-blur-md overflow-hidden";
 
 function WidgetInput({
   value,
@@ -1126,7 +1113,7 @@ function WidgetInput({
       }}
       onBlur={commit}
       className={cn(
-        "w-[4.5rem] bg-transparent text-center text-[9px] font-medium outline-none placeholder:text-white/20",
+        "w-[4.5rem] max-md:w-[3rem] bg-transparent text-center text-[9px] font-medium outline-none placeholder:text-white/20",
         accent,
       )}
     />
@@ -1217,7 +1204,7 @@ function LocationWidget({ value, onSave }: { value: string; onSave: (v: string) 
       </div>
       <span
         className={cn(
-          "max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0",
+          "max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0",
           !value && "italic opacity-40",
         )}
       >
@@ -1258,7 +1245,7 @@ function CalendarWidget({ value, onSave }: { value: string; onSave: (v: string) 
       </div>
       <span
         className={cn(
-          "max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0",
+          "max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0",
           !value && "italic opacity-40",
         )}
       >
@@ -1349,7 +1336,7 @@ function ClockWidget({ value, onSave }: { value: string; onSave: (v: string) => 
       </div>
       <span
         className={cn(
-          "max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0",
+          "max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0",
           !value && "italic opacity-40",
         )}
       >
@@ -1385,7 +1372,7 @@ function WeatherWidget({ value, onSave }: { value: string; onSave: (v: string) =
       </div>
       <span
         className={cn(
-          "max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0",
+          "max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0",
           !value && "italic opacity-40",
         )}
       >
@@ -1475,7 +1462,7 @@ function TemperatureWidget({ value, onSave }: { value: string; onSave: (v: strin
       </div>
       <span
         className={cn(
-          "max-w-[4.5rem] truncate text-[9px] font-semibold leading-tight shrink-0",
+          "max-w-[4.5rem] max-md:max-w-[3rem] truncate text-[9px] max-md:text-[7px] font-semibold leading-tight shrink-0",
           !value && "italic opacity-40",
         )}
       >

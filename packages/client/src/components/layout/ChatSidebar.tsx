@@ -1,7 +1,18 @@
 // ──────────────────────────────────────────────
 // Layout: Chat Sidebar (polished with rich buttons)
 // ──────────────────────────────────────────────
-import { Plus, MessageSquare, Search, Trash2, BookOpen, Theater, Lock, GitBranch, AlertTriangle } from "lucide-react";
+import {
+  Plus,
+  MessageSquare,
+  Search,
+  Trash2,
+  BookOpen,
+  Theater,
+  Lock,
+  GitBranch,
+  AlertTriangle,
+  X,
+} from "lucide-react";
 import { useChats, useCreateChat, useDeleteChat, useDeleteChatGroup } from "../../hooks/use-chats";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
@@ -48,6 +59,7 @@ export function ChatSidebar() {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
   const hasAnyDetailOpen = useUIStore((s) => s.hasAnyDetailOpen);
   const closeAllDetails = useUIStore((s) => s.closeAllDetails);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const [searchQuery, setSearchQuery] = useState("");
   const [showModePicker, setShowModePicker] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -117,13 +129,22 @@ export function ChatSidebar() {
       <div className="relative flex h-12 items-center justify-between px-4">
         <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />
         <h2 className="retro-glow-text text-sm font-bold tracking-tight">✧ Chats</h2>
-        <button
-          onClick={() => setShowModePicker(true)}
-          className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)] hover:text-[var(--y2k-pink)] active:scale-90"
-          title="New Chat"
-        >
-          <Plus size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowModePicker(true)}
+            className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)] hover:text-[var(--y2k-pink)] active:scale-90"
+            title="New Chat"
+          >
+            <Plus size={16} />
+          </button>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-all hover:bg-[var(--sidebar-accent)] hover:text-[var(--y2k-pink)] active:scale-90 md:hidden"
+            title="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -175,6 +196,7 @@ export function ChatSidebar() {
                     closeAllDetails();
                   }
                   setActiveChatId(chat.id);
+                  if (window.innerWidth < 768) setSidebarOpen(false);
                 }}
                 className={cn(
                   "group relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-all duration-150",
