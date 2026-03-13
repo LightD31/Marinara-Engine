@@ -4,10 +4,11 @@
 
 # ── Stage 1: Build ──
 FROM node:20-slim AS builder
+ARG PNPM_VERSION=9.15.0
 WORKDIR /app
 
 # Enable corepack for pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Copy workspace config first (layer cache for deps)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -29,9 +30,10 @@ RUN pnpm build
 
 # ── Stage 2: Production ──
 FROM node:20-slim AS production
+ARG PNPM_VERSION=9.15.0
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Copy workspace config
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
