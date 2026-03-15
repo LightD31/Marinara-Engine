@@ -4,7 +4,13 @@
 // ──────────────────────────────────────────────
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useUIStore } from "../../stores/ui.store";
-import { useAgentConfigs, useUpdateAgent, useCreateAgent, useToggleAgent, type AgentConfigRow } from "../../hooks/use-agents";
+import {
+  useAgentConfigs,
+  useUpdateAgent,
+  useCreateAgent,
+  useToggleAgent,
+  type AgentConfigRow,
+} from "../../hooks/use-agents";
 import { useConnections } from "../../hooks/use-connections";
 import { useCustomTools, type CustomToolRow } from "../../hooks/use-custom-tools";
 import {
@@ -126,6 +132,10 @@ export function AgentEditor() {
   const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const spotifyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -331,11 +341,7 @@ export function AgentEditor() {
   const isPending = updateAgent.isPending || createAgent.isPending;
 
   // Current enabled state
-  const isEnabled = dbConfig
-    ? dbConfig.enabled === "true"
-    : builtIn
-      ? builtIn.enabledByDefault
-      : true;
+  const isEnabled = dbConfig ? dbConfig.enabled === "true" : builtIn ? builtIn.enabledByDefault : true;
 
   const handleToggleEnabled = async () => {
     if (builtIn) {
@@ -350,15 +356,15 @@ export function AgentEditor() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-[var(--background)]">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3 max-md:gap-2 max-md:px-3">
         <button
           onClick={handleClose}
           className="rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--y2k-pink)] to-[var(--y2k-purple)] text-white shadow-sm">
-          <Sparkles size={18} />
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--y2k-pink)] to-[var(--y2k-purple)] text-white shadow-sm max-md:h-8 max-md:w-8">
+          <Sparkles size={18} className="max-md:!h-[14px] max-md:!w-[14px]" />
         </div>
         <input
           value={localName}
@@ -366,10 +372,10 @@ export function AgentEditor() {
             setLocalName(e.target.value);
             markDirty();
           }}
-          className="flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)]"
+          className="flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)] max-md:text-base"
           placeholder="Agent name…"
         />
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 max-md:w-full max-md:justify-end max-md:border-t max-md:border-[var(--border)]/30 max-md:pt-2">
           {saveError && (
             <span className="mr-2 flex items-center gap-1 text-[10px] font-medium text-red-400">
               <AlertCircle size={11} /> Save failed
@@ -394,7 +400,7 @@ export function AgentEditor() {
               title={isEnabled ? "Disable agent globally" : "Enable agent globally"}
             >
               {isEnabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-              {isEnabled ? "Enabled" : "Disabled"}
+              <span className="max-md:hidden">{isEnabled ? "Enabled" : "Disabled"}</span>
             </button>
           )}
           {isCustomAgent && dbConfig && (
@@ -402,7 +408,7 @@ export function AgentEditor() {
               onClick={handleDelete}
               className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/15 active:scale-[0.98]"
             >
-              <Trash2 size={13} /> Delete
+              <Trash2 size={13} /> <span className="max-md:hidden">Delete</span>
             </button>
           )}
           <button
@@ -410,7 +416,7 @@ export function AgentEditor() {
             disabled={isPending}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[var(--y2k-pink)] to-[var(--y2k-purple)] px-4 py-2 text-xs font-medium text-white shadow-md transition-all hover:shadow-lg active:scale-[0.98] disabled:opacity-50"
           >
-            <Save size={13} /> Save
+            <Save size={13} /> <span className="max-md:hidden">Save</span>
           </button>
         </div>
       </div>
@@ -457,7 +463,7 @@ export function AgentEditor() {
       )}
 
       {/* ── Body ── */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 max-md:p-4">
         <div className="mx-auto max-w-3xl space-y-6">
           {/* ── Description ── */}
           <FieldGroup
@@ -1076,9 +1082,7 @@ export function AgentEditor() {
               </p>
               <p>
                 <strong className="text-[var(--foreground)]">Enabled:</strong>{" "}
-                <span className={isEnabled ? "text-emerald-400" : "text-red-400"}>
-                  {isEnabled ? "Yes" : "No"}
-                </span>
+                <span className={isEnabled ? "text-emerald-400" : "text-red-400"}>{isEnabled ? "Yes" : "No"}</span>
                 {!dbConfig && builtIn && " (default)"}
               </p>
             </div>

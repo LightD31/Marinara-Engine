@@ -43,8 +43,9 @@ import {
   FolderOpen,
   Loader2,
   Swords,
+  Crop,
 } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { cn, getAvatarCropStyle } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { api } from "../../lib/api-client";
 import { ColorPicker } from "../ui/ColorPicker";
@@ -87,6 +88,10 @@ export function CharacterEditor() {
   const [formData, setFormData] = useState<CharacterData | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [saving, setSaving] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
@@ -197,7 +202,7 @@ export function CharacterEditor() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-[var(--background)]">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3 max-md:gap-2 max-md:px-3">
         <button
           onClick={handleClose}
           className="rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
@@ -208,11 +213,16 @@ export function CharacterEditor() {
 
         {/* Avatar */}
         <div
-          className="group relative flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-pink-400 to-rose-500 shadow-md shadow-pink-500/20"
+          className="group relative flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-pink-400 to-rose-500 shadow-md shadow-pink-500/20 max-md:h-10 max-md:w-10"
           onClick={() => fileInputRef.current?.click()}
         >
           {avatarPreview ? (
-            <img src={avatarPreview} alt={formData.name} className="h-full w-full object-cover" />
+            <img
+              src={avatarPreview}
+              alt={formData.name}
+              className="h-full w-full object-cover"
+              style={getAvatarCropStyle(formData.extensions.avatarCrop as { zoom: number; offsetX: number; offsetY: number } | undefined)}
+            />
           ) : (
             <User size={22} className="text-white" />
           )}
@@ -285,7 +295,7 @@ export function CharacterEditor() {
           )}
         >
           <Save size={13} />
-          {saving ? "Saving…" : "Save"}
+          <span className="max-md:hidden">{saving ? "Saving…" : "Save"}</span>
         </button>
       </div>
 
@@ -354,6 +364,7 @@ export function CharacterEditor() {
                 setNewTag={setNewTag}
                 addTag={addTag}
                 removeTag={removeTag}
+                avatarPreview={avatarPreview}
               />
             )}
             {activeTab === "description" && (
@@ -474,6 +485,7 @@ function MetadataTab({
   setNewTag,
   addTag,
   removeTag,
+  avatarPreview,
 }: {
   formData: CharacterData;
   updateField: <K extends keyof CharacterData>(key: K, value: CharacterData[K]) => void;
@@ -482,10 +494,117 @@ function MetadataTab({
   setNewTag: (v: string) => void;
   addTag: () => void;
   removeTag: (tag: string) => void;
+  avatarPreview: string | null;
 }) {
+  const crop = (formData.extensions.avatarCrop as { zoom: number; offsetX: number; offsetY: number } | undefined) ?? {
+    zoom: 1,
+    offsetX: 0,
+    offsetY: 0,
+  };
+
+  const setCrop = (next: { zoom: number; offsetX: number; offsetY: number }) => {
+    updateExtension("avatarCrop", next);
+  };
+
+  // Drag-to-reposition state
+  const dragRef = useRef<{ startX: number; startY: number; startOX: number; startOY: number } | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (crop.zoom <= 1) return;
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startOX: crop.offsetX, startOY: crop.offsetY };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragRef.current || !previewRef.current) return;
+    const rect = previewRef.current.getBoundingClientRect();
+    const dx = ((e.clientX - dragRef.current.startX) / rect.width) * 100;
+    const dy = ((e.clientY - dragRef.current.startY) / rect.height) * 100;
+    const maxOffset = ((crop.zoom - 1) / crop.zoom) * 50;
+    const ox = Math.max(-maxOffset, Math.min(maxOffset, dragRef.current.startOX + dx / crop.zoom));
+    const oy = Math.max(-maxOffset, Math.min(maxOffset, dragRef.current.startOY + dy / crop.zoom));
+    setCrop({ ...crop, offsetX: Math.round(ox * 100) / 100, offsetY: Math.round(oy * 100) / 100 });
+  };
+
+  const onPointerUp = () => {
+    dragRef.current = null;
+  };
+
   return (
     <div className="space-y-5">
       <SectionHeader title="Metadata" subtitle="Basic character info — name, creator, version, tags." />
+
+      {/* Avatar Crop / Zoom */}
+      {avatarPreview && (
+        <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4">
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+            <Crop size={12} /> Avatar Zoom & Position
+          </span>
+          <div className="flex items-start gap-4 max-sm:flex-col max-sm:items-center">
+            {/* Preview */}
+            <div
+              ref={previewRef}
+              className="relative h-28 w-28 shrink-0 cursor-grab overflow-hidden rounded-full bg-black/20 ring-2 ring-[var(--border)] active:cursor-grabbing touch-none"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+            >
+              <img
+                src={avatarPreview}
+                alt={formData.name}
+                className="h-full w-full object-cover"
+                draggable={false}
+                style={{
+                  transform:
+                    crop.zoom > 1
+                      ? `scale(${crop.zoom}) translate(${crop.offsetX}%, ${crop.offsetY}%)`
+                      : undefined,
+                }}
+              />
+            </div>
+            {/* Controls */}
+            <div className="flex flex-1 flex-col gap-2">
+              <label className="space-y-1">
+                <span className="text-[10px] text-[var(--muted-foreground)]">
+                  Zoom: {crop.zoom.toFixed(2)}x
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.05}
+                  value={crop.zoom}
+                  onChange={(e) => {
+                    const z = parseFloat(e.target.value);
+                    const maxOffset = ((z - 1) / z) * 50;
+                    setCrop({
+                      zoom: z,
+                      offsetX: Math.max(-maxOffset, Math.min(maxOffset, crop.offsetX)),
+                      offsetY: Math.max(-maxOffset, Math.min(maxOffset, crop.offsetY)),
+                    });
+                  }}
+                  className="w-full accent-[var(--primary)]"
+                />
+              </label>
+              <p className="text-[10px] text-[var(--muted-foreground)]">
+                {crop.zoom > 1 ? "Drag the preview to reposition" : "Increase zoom to reposition"}
+              </p>
+              {crop.zoom > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setCrop({ zoom: 1, offsetX: 0, offsetY: 0 })}
+                  className="self-start rounded-lg bg-[var(--accent)] px-2.5 py-1 text-[10px] font-medium text-[var(--muted-foreground)] transition-all hover:text-[var(--foreground)]"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="space-y-1.5">

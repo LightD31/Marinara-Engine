@@ -25,7 +25,7 @@ export function TopBar() {
   const closeAllDetails = useUIStore((s) => s.closeAllDetails);
 
   return (
-    <header className="relative flex h-12 flex-shrink-0 items-center justify-between px-3">
+    <header className="relative z-10 flex h-12 flex-shrink-0 items-center justify-between bg-[var(--card)]/80 px-3 backdrop-blur-sm">
       {/* Subtle bottom border only */}
       <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />
 

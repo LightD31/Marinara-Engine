@@ -42,6 +42,8 @@ interface RoleplayHUDProps {
   characterCount: number;
   layout?: HudPosition;
   onRetriggerTrackers?: () => void;
+  /** When provided, overrides the globally-computed set so that only per-chat agents show widgets. */
+  enabledAgentTypes?: Set<string>;
 }
 
 export function RoleplayHUD({
@@ -50,13 +52,14 @@ export function RoleplayHUD({
   layout = "top",
   onRetriggerTrackers,
   mobileCompact,
+  enabledAgentTypes: enabledAgentTypesProp,
 }: RoleplayHUDProps & { mobileCompact?: boolean }) {
   const [agentsOpen, setAgentsOpen] = useState(false);
   const gameState = useGameStateStore((s) => s.current);
   const setGameState = useGameStateStore((s) => s.setGameState);
 
   const { data: agentConfigs } = useAgentConfigs();
-  const enabledAgentTypes = useMemo(() => {
+  const globalEnabledAgentTypes = useMemo(() => {
     const set = new Set<string>();
     if (agentConfigs) {
       for (const a of agentConfigs as Array<{ type: string; enabled: string }>) {
@@ -65,6 +68,7 @@ export function RoleplayHUD({
     }
     return set;
   }, [agentConfigs]);
+  const enabledAgentTypes = enabledAgentTypesProp ?? globalEnabledAgentTypes;
 
   const thoughtBubbles = useAgentStore((s) => s.thoughtBubbles);
   const isAgentProcessing = useAgentStore((s) => s.isProcessing);

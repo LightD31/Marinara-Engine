@@ -8,8 +8,11 @@ import fastifyStatic from "@fastify/static";
 import { getDB, type DB } from "./db/connection.js";
 import { registerRoutes } from "./routes/index.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { ipAllowlistHook } from "./middleware/ip-allowlist.js";
 import { runMigrations } from "./db/migrate.js";
 import { seedDefaultPreset } from "./db/seed.js";
+import { recoverGalleryImages } from "./services/storage/gallery-recovery.js";
+import { APP_VERSION } from "@marinara-engine/shared";
 import { existsSync } from "fs";
 import { join, resolve } from "path";
 
@@ -46,6 +49,12 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Seed defaults ──
   await seedDefaultPreset(db);
 
+  // ── Recover orphaned gallery images (files on disk without DB records) ──
+  await recoverGalleryImages(db);
+
+  // ── IP Allowlist ──
+  app.addHook("onRequest", ipAllowlistHook);
+
   // ── Error Handler ──
   app.setErrorHandler(errorHandler);
 
@@ -70,7 +79,7 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── Health Check ──
   app.get("/api/health", async () => ({
     status: "ok",
-    version: "1.3.0",
+    version: APP_VERSION,
     timestamp: new Date().toISOString(),
   }));
 

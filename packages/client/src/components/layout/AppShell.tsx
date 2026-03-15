@@ -45,7 +45,7 @@ export function AppShell() {
   const regexDetailId = useUIStore((s) => s.regexDetailId);
 
   return (
-    <div className="retro-scanlines noise-bg geometric-grid flex h-screen w-screen max-w-[100vw] overflow-hidden bg-[var(--background)]">
+    <div className="retro-scanlines noise-bg geometric-grid flex h-screen h-[100dvh] w-screen max-w-[100vw] overflow-hidden bg-[var(--background)] max-md:pt-[env(safe-area-inset-top)]">
       {/* Y2K decorative stars */}
       <div className="y2k-star hidden md:block" style={{ top: "10%", left: "5%", animationDelay: "0s" }} />
       <div className="y2k-star-md hidden md:block" style={{ top: "25%", right: "8%", animationDelay: "1.5s" }} />

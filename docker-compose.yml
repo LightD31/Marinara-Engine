@@ -11,7 +11,10 @@
 # ──────────────────────────────────────────────
 services:
   marinara:
+    # To use a pre-built image from GHCR instead of building locally,
+    # comment out "build: ." and uncomment the "image:" line below:
     build: .
+    # image: ghcr.io/OWNER/marinara-engine:latest
     ports:
       - "${PORT:-7860}:7860"
     volumes:

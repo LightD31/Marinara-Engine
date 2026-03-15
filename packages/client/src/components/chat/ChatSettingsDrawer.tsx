@@ -24,7 +24,7 @@ import {
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
 import { ChoiceSelectionModal } from "../presets/ChoiceSelectionModal";
-import { useCharacters, useCharacterSprites, usePersonas } from "../../hooks/use-characters";
+import { useCharacters, useCharacterSprites, usePersonas, useCharacterGroups } from "../../hooks/use-characters";
 import { useLorebooks } from "../../hooks/use-lorebooks";
 import { usePresets } from "../../hooks/use-presets";
 import { useConnections } from "../../hooks/use-connections";
@@ -33,7 +33,7 @@ import { api } from "../../lib/api-client";
 import { useUIStore } from "../../stores/ui.store";
 import { useAgentConfigs, type AgentConfigRow } from "../../hooks/use-agents";
 import { BUILT_IN_AGENTS, BUILT_IN_TOOLS } from "@marinara-engine/shared";
-import type { Chat } from "@marinara-engine/shared";
+import type { Chat, CharacterGroup } from "@marinara-engine/shared";
 import { useCustomTools, type CustomToolRow } from "../../hooks/use-custom-tools";
 
 interface ChatSettingsDrawerProps {
@@ -48,6 +48,7 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
   const createMessage = useCreateMessage(chat.id);
 
   const { data: allCharacters } = useCharacters();
+  const { data: characterGroups } = useCharacterGroups();
   const { data: lorebooks } = useLorebooks();
   const { data: presets } = usePresets();
   const { data: connections } = useConnections();
@@ -285,9 +286,12 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(chat.name);
   const [showCharPicker, setShowCharPicker] = useState(false);
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
   const [showLbPicker, setShowLbPicker] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [showToolPicker, setShowToolPicker] = useState(false);
+  const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([]);
+  const [pendingToolIds, setPendingToolIds] = useState<string[]>([]);
   const [charSearch, setCharSearch] = useState("");
   const [lbSearch, setLbSearch] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
@@ -309,7 +313,7 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
       <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-[2px]" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="absolute right-0 top-0 z-50 flex h-full w-80 flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up">
+      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h3 className="text-sm font-bold">Chat Settings</h3>
@@ -602,6 +606,62 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                 )}
               </PickerDropdown>
             )}
+
+            {/* Add from Group picker */}
+            {((characterGroups ?? []) as CharacterGroup[]).length > 0 &&
+              (!showGroupPicker ? (
+                <button
+                  onClick={() => setShowGroupPicker(true)}
+                  className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+                >
+                  <Users size={12} /> Add from Group
+                </button>
+              ) : (
+                <PickerDropdown
+                  search=""
+                  onSearchChange={() => {}}
+                  onClose={() => setShowGroupPicker(false)}
+                  placeholder="Select a group…"
+                >
+                  {((characterGroups ?? []) as CharacterGroup[]).map((group) => {
+                    const rawIds = group.characterIds ?? [];
+                    const groupCharIds: string[] = Array.isArray(rawIds)
+                      ? rawIds
+                      : typeof rawIds === "string"
+                        ? JSON.parse(rawIds)
+                        : [];
+                    const newIds = groupCharIds.filter((id) => !chatCharIds.includes(id));
+                    return (
+                      <button
+                        key={group.id}
+                        onClick={() => {
+                          if (newIds.length > 0) {
+                            updateChat.mutate({ id: chat.id, characterIds: [...chatCharIds, ...newIds] });
+                          }
+                          setShowGroupPicker(false);
+                        }}
+                        className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
+                      >
+                        {group.avatarPath ? (
+                          <img src={group.avatarPath} alt={group.name} className="h-6 w-6 rounded-full object-cover" />
+                        ) : (
+                          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent)] text-[9px] font-bold">
+                            {group.name[0]}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <span className="block truncate text-xs">{group.name}</span>
+                          <span className="block truncate text-[10px] text-[var(--muted-foreground)]">
+                            {groupCharIds.length} characters
+                            {newIds.length > 0 ? ` (· ${newIds.length} new)` : " (all added)"}
+                          </span>
+                        </div>
+                        {newIds.length > 0 && <Plus size={12} className="text-[var(--muted-foreground)]" />}
+                      </button>
+                    );
+                  })}
+                </PickerDropdown>
+              ))}
           </Section>
 
           {/* Group Chat Settings — only when 2+ characters */}
@@ -852,7 +912,7 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                       No per-chat agent overrides. Workspace default agents will be used for this chat.
                     </p>
                   ) : (
-                    <div className="flex flex-col gap-1">
+                    <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
                       {activeAgentIds.map((agentId) => {
                         const agent = availableAgents.find((a) => a.id === agentId);
                         if (!agent) return null;
@@ -884,10 +944,11 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                       onClick={() => {
                         setShowAgentPicker(true);
                         setAgentSearch("");
+                        setPendingAgentIds([]);
                       }}
                       className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                     >
-                      <Plus size={12} /> Add Agent
+                      <Plus size={12} /> Add Agents
                     </button>
                   ) : (
                     <PickerDropdown
@@ -895,29 +956,62 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                       onSearchChange={setAgentSearch}
                       onClose={() => setShowAgentPicker(false)}
                       placeholder="Search agents…"
+                      footer={
+                        pendingAgentIds.length > 0 ? (
+                          <div className="border-t border-[var(--border)] px-3 py-2">
+                            <button
+                              onClick={() => {
+                                const next = [...activeAgentIds, ...pendingAgentIds];
+                                updateMeta.mutate({ id: chat.id, activeAgentIds: next });
+                                setPendingAgentIds([]);
+                                setShowAgentPicker(false);
+                              }}
+                              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
+                            >
+                              <Plus size={12} /> Add {pendingAgentIds.length} Agent
+                              {pendingAgentIds.length > 1 ? "s" : ""}
+                            </button>
+                          </div>
+                        ) : undefined
+                      }
                     >
                       {availableAgents
                         .filter((a) => !activeAgentIds.includes(a.id))
                         .filter((a) => a.name.toLowerCase().includes(agentSearch.toLowerCase()))
-                        .map((a) => (
-                          <button
-                            key={a.id}
-                            onClick={() => {
-                              toggleAgent(a.id);
-                              setShowAgentPicker(false);
-                            }}
-                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
-                          >
-                            <Sparkles size={14} className="text-[var(--muted-foreground)]" />
-                            <div className="flex-1 min-w-0">
-                              <span className="block truncate text-xs">{a.name}</span>
-                              <span className="block truncate text-[10px] text-[var(--muted-foreground)]">
-                                {a.description}
-                              </span>
-                            </div>
-                            <Plus size={12} className="text-[var(--muted-foreground)]" />
-                          </button>
-                        ))}
+                        .map((a) => {
+                          const selected = pendingAgentIds.includes(a.id);
+                          return (
+                            <button
+                              key={a.id}
+                              onClick={() =>
+                                setPendingAgentIds((prev) =>
+                                  prev.includes(a.id) ? prev.filter((id) => id !== a.id) : [...prev, a.id],
+                                )
+                              }
+                              className={cn(
+                                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
+                                selected && "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30",
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                                  selected
+                                    ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                                    : "border-[var(--border)]",
+                                )}
+                              >
+                                {selected && <Check size={10} />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <span className="block truncate text-xs">{a.name}</span>
+                                <span className="block truncate text-[10px] text-[var(--muted-foreground)]">
+                                  {a.description}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
                       {availableAgents
                         .filter((a) => !activeAgentIds.includes(a.id))
                         .filter((a) => a.name.toLowerCase().includes(agentSearch.toLowerCase())).length === 0 && (
@@ -984,10 +1078,11 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                 <>
                   {activeToolIds.length === 0 ? (
                     <p className="text-[11px] text-[var(--muted-foreground)] px-1">
-                      All globally enabled tools are available to this chat. Add tools below to restrict this chat to a specific set.
+                      All globally enabled tools are available to this chat. Add tools below to restrict this chat to a
+                      specific set.
                     </p>
                   ) : (
-                    <div className="flex flex-col gap-1">
+                    <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
                       {activeToolIds.map((toolId) => {
                         const tool = availableTools.find((t) => t.id === toolId);
                         if (!tool) return null;
@@ -1019,10 +1114,11 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                       onClick={() => {
                         setShowToolPicker(true);
                         setToolSearch("");
+                        setPendingToolIds([]);
                       }}
                       className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
                     >
-                      <Plus size={12} /> Add Function
+                      <Plus size={12} /> Add Functions
                     </button>
                   ) : (
                     <PickerDropdown
@@ -1030,29 +1126,62 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
                       onSearchChange={setToolSearch}
                       onClose={() => setShowToolPicker(false)}
                       placeholder="Search functions…"
+                      footer={
+                        pendingToolIds.length > 0 ? (
+                          <div className="border-t border-[var(--border)] px-3 py-2">
+                            <button
+                              onClick={() => {
+                                const next = [...activeToolIds, ...pendingToolIds];
+                                updateMeta.mutate({ id: chat.id, activeToolIds: next });
+                                setPendingToolIds([]);
+                                setShowToolPicker(false);
+                              }}
+                              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
+                            >
+                              <Plus size={12} /> Add {pendingToolIds.length} Function
+                              {pendingToolIds.length > 1 ? "s" : ""}
+                            </button>
+                          </div>
+                        ) : undefined
+                      }
                     >
                       {availableTools
                         .filter((t) => !activeToolIds.includes(t.id))
                         .filter((t) => t.name.toLowerCase().includes(toolSearch.toLowerCase()))
-                        .map((t) => (
-                          <button
-                            key={t.id}
-                            onClick={() => {
-                              toggleTool(t.id);
-                              setShowToolPicker(false);
-                            }}
-                            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]"
-                          >
-                            <Wrench size={14} className="text-[var(--muted-foreground)]" />
-                            <div className="flex-1 min-w-0">
-                              <span className="block truncate text-xs">{t.name}</span>
-                              <span className="block truncate text-[10px] text-[var(--muted-foreground)]">
-                                {t.description}
-                              </span>
-                            </div>
-                            <Plus size={12} className="text-[var(--muted-foreground)]" />
-                          </button>
-                        ))}
+                        .map((t) => {
+                          const selected = pendingToolIds.includes(t.id);
+                          return (
+                            <button
+                              key={t.id}
+                              onClick={() =>
+                                setPendingToolIds((prev) =>
+                                  prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id],
+                                )
+                              }
+                              className={cn(
+                                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--accent)]",
+                                selected && "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/30",
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                                  selected
+                                    ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                                    : "border-[var(--border)]",
+                                )}
+                              >
+                                {selected && <Check size={10} />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <span className="block truncate text-xs">{t.name}</span>
+                                <span className="block truncate text-[10px] text-[var(--muted-foreground)]">
+                                  {t.description}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
                       {availableTools
                         .filter((t) => !activeToolIds.includes(t.id))
                         .filter((t) => t.name.toLowerCase().includes(toolSearch.toLowerCase())).length === 0 && (
@@ -1241,12 +1370,14 @@ function PickerDropdown({
   onClose,
   placeholder,
   children,
+  footer,
 }: {
   search: string;
   onSearchChange: (v: string) => void;
   onClose: () => void;
   placeholder: string;
   children: React.ReactNode;
+  footer?: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -1276,6 +1407,8 @@ function PickerDropdown({
       </div>
       {/* List */}
       <div className="max-h-48 overflow-y-auto">{children}</div>
+      {/* Footer — always visible below the scrollable list */}
+      {footer}
     </div>
   );
 }

@@ -36,6 +36,8 @@ import {
   Download,
   Maximize2,
   X,
+  ArrowUpDown,
+  Hash,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -57,6 +59,20 @@ const CATEGORY_OPTIONS: Array<{ value: LorebookCategory; label: string; icon: ty
   { value: "uncategorized", label: "Uncategorized", icon: BookOpen },
 ];
 
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+type EntrySortKey = "order" | "name-asc" | "name-desc" | "tokens" | "keys";
+
+const SORT_OPTIONS: Array<{ value: EntrySortKey; label: string }> = [
+  { value: "order", label: "Order" },
+  { value: "name-asc", label: "Name A→Z" },
+  { value: "name-desc", label: "Name Z→A" },
+  { value: "tokens", label: "Tokens ↓" },
+  { value: "keys", label: "Keys ↓" },
+];
+
 export function LorebookEditor() {
   const lorebookId = useUIStore((s) => s.lorebookDetailId);
   const closeDetail = useUIStore((s) => s.closeLorebookDetail);
@@ -74,9 +90,14 @@ export function LorebookEditor() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [saving, setSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [entrySearch, setEntrySearch] = useState("");
+  const [entrySort, setEntrySort] = useState<EntrySortKey>("order");
 
   // ── Form state for lorebook overview ──
   const [formName, setFormName] = useState("");
@@ -117,17 +138,32 @@ export function LorebookEditor() {
     }
   }, [editingEntryId, entries]);
 
-  // Filtered entries
+  // Filtered + sorted entries
   const filteredEntries = useMemo(() => {
-    if (!entrySearch) return entries;
-    const q = entrySearch.toLowerCase();
-    return entries.filter(
-      (e) =>
-        e.name.toLowerCase().includes(q) ||
-        e.keys.some((k) => k.toLowerCase().includes(q)) ||
-        e.content.toLowerCase().includes(q),
-    );
-  }, [entries, entrySearch]);
+    let result = entries;
+    if (entrySearch) {
+      const q = entrySearch.toLowerCase();
+      result = result.filter(
+        (e) =>
+          e.name.toLowerCase().includes(q) ||
+          e.keys.some((k) => k.toLowerCase().includes(q)) ||
+          e.content.toLowerCase().includes(q),
+      );
+    }
+    switch (entrySort) {
+      case "name-asc":
+        return [...result].sort((a, b) => a.name.localeCompare(b.name));
+      case "name-desc":
+        return [...result].sort((a, b) => b.name.localeCompare(a.name));
+      case "tokens":
+        return [...result].sort((a, b) => estimateTokens(b.content) - estimateTokens(a.content));
+      case "keys":
+        return [...result].sort((a, b) => b.keys.length - a.keys.length);
+      case "order":
+      default:
+        return [...result].sort((a, b) => a.order - b.order);
+    }
+  }, [entries, entrySearch, entrySort]);
 
   // ── Handlers ──
   const markDirty = useCallback(() => setDirty(true), []);
@@ -330,6 +366,10 @@ export function LorebookEditor() {
                 placeholder="The content that will be injected into the prompt when this entry activates…"
                 title="Edit Content"
               />
+              <p className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
+                <Hash size={9} />
+                ~{estimateTokens(entryForm.content ?? "").toLocaleString()} tokens
+              </p>
             </FieldGroup>
 
             {/* Toggles row */}
@@ -745,7 +785,7 @@ export function LorebookEditor() {
 
           {activeTab === "entries" && (
             <div className="space-y-3">
-              {/* Search + Add */}
+              {/* Search + Sort + Add */}
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Search
@@ -760,6 +800,23 @@ export function LorebookEditor() {
                     className="w-full rounded-xl bg-[var(--secondary)] py-2.5 pl-8 pr-3 text-xs ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
                   />
                 </div>
+                <div className="relative">
+                  <ArrowUpDown
+                    size={13}
+                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
+                  />
+                  <select
+                    value={entrySort}
+                    onChange={(e) => setEntrySort(e.target.value as EntrySortKey)}
+                    className="h-full appearance-none rounded-xl bg-[var(--secondary)] py-2.5 pl-8 pr-6 text-xs ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                  >
+                    {SORT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button
                   onClick={handleAddEntry}
                   className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-xs font-medium text-white shadow-md transition-all hover:shadow-lg active:scale-[0.98]"
@@ -768,6 +825,18 @@ export function LorebookEditor() {
                   Add Entry
                 </button>
               </div>
+
+              {/* Total tokens summary */}
+              {filteredEntries.length > 0 && (
+                <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
+                  <span>{filteredEntries.length} entries</span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1">
+                    <Hash size={10} />
+                    {filteredEntries.reduce((sum, e) => sum + estimateTokens(e.content), 0).toLocaleString()} tokens (est.)
+                  </span>
+                </div>
+              )}
 
               {/* Entry list */}
               {filteredEntries.length === 0 && (
@@ -810,6 +879,11 @@ export function LorebookEditor() {
                       <span>Order {entry.order}</span>
                       <span>•</span>
                       <span>Depth {entry.depth}</span>
+                      <span>•</span>
+                      <span className="flex items-center gap-0.5">
+                        <Hash size={9} />
+                        {estimateTokens(entry.content).toLocaleString()} tk
+                      </span>
                     </div>
                   </div>
                   <button

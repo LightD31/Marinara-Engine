@@ -48,6 +48,7 @@ import {
   HelpCircle,
   RefreshCw,
   MoreHorizontal,
+  Globe,
 } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { useAgentStore } from "../../stores/agent.store";
@@ -56,10 +57,11 @@ import { EncounterModal } from "./EncounterModal";
 import { useEncounter } from "../../hooks/use-encounter";
 import { useEncounterStore } from "../../stores/encounter.store";
 import { SummaryPopover } from "./SummaryPopover";
+import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { APP_VERSION } from "@marinara-engine/shared";
 import { BUILT_IN_AGENTS } from "@marinara-engine/shared";
 
-/** Map characterId → { name, avatarUrl, colors } */
+/** Map characterId → { name, avatarUrl, colors, avatarCrop } */
 export type CharacterMap = Map<
   string,
   {
@@ -68,6 +70,7 @@ export type CharacterMap = Map<
     nameColor?: string;
     dialogueColor?: string;
     boxColor?: string;
+    avatarCrop?: { zoom: number; offsetX: number; offsetY: number } | null;
   }
 >;
 
@@ -134,6 +137,10 @@ export function ChatArea() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
   const isLoadingMoreRef = useRef(false);
+  // Tracks whether the initial load stagger animation has played.
+  // After the first render with messages, new/re-mounted messages
+  // skip the entry animation to avoid a visible flash on refetch.
+  const hasAnimatedRef = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -186,7 +193,14 @@ export function ChatArea() {
   const characterMap: CharacterMap = useMemo(() => {
     const map = new Map<
       string,
-      { name: string; avatarUrl: string | null; nameColor?: string; dialogueColor?: string; boxColor?: string }
+      {
+        name: string;
+        avatarUrl: string | null;
+        nameColor?: string;
+        dialogueColor?: string;
+        boxColor?: string;
+        avatarCrop?: { zoom: number; offsetX: number; offsetY: number } | null;
+      }
     >();
     if (!allCharacters) return map;
     for (const char of allCharacters as Array<{ id: string; data: string; avatarPath: string | null }>) {
@@ -198,6 +212,7 @@ export function ChatArea() {
           nameColor: parsed.extensions?.nameColor || undefined,
           dialogueColor: parsed.extensions?.dialogueColor || undefined,
           boxColor: parsed.extensions?.boxColor || undefined,
+          avatarCrop: parsed.extensions?.avatarCrop || null,
         });
       } catch {
         map.set(char.id, { name: "Unknown", avatarUrl: null });
@@ -416,6 +431,11 @@ export function ChatArea() {
   useEffect(() => {
     if (chat) setActiveChat(chat);
   }, [chat, setActiveChat]);
+
+  // Reset stagger animation flag when switching chats
+  useEffect(() => {
+    hasAnimatedRef.current = false;
+  }, [activeChatId]);
 
   // Auto-open settings drawer for newly created chats
   const shouldOpenSettings = useChatStore((s) => s.shouldOpenSettings);
@@ -671,6 +691,7 @@ export function ChatArea() {
             <div className="relative z-40 flex flex-col items-center gap-1.5 overflow-y-auto px-1.5 py-2 max-md:hidden">
               <div className="flex flex-col items-center gap-1">
                 <SummaryButton chatId={chat?.id ?? null} summary={chatMeta.summary ?? null} />
+                <WorldInfoButton chatId={chat?.id ?? null} />
                 <RpToolbarButton
                   icon={<FolderOpen size={14} />}
                   title="Manage Chat Files"
@@ -696,6 +717,7 @@ export function ChatArea() {
                 characterCount={chatCharIds.length}
                 layout="left"
                 onRetriggerTrackers={handleRerunTrackers}
+                enabledAgentTypes={enabledAgentTypes}
               />
             </div>
           )}
@@ -711,12 +733,14 @@ export function ChatArea() {
                       characterCount={chatCharIds.length}
                       layout="top"
                       onRetriggerTrackers={handleRerunTrackers}
+                      enabledAgentTypes={enabledAgentTypes}
                     />
                   </div>
                 )}
                 <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 ml-auto">
                   <ToolbarMenu>
                     <SummaryButton chatId={chat?.id ?? null} summary={chatMeta.summary ?? null} />
+                    <WorldInfoButton chatId={chat?.id ?? null} />
                     <RpToolbarButton
                       icon={<FolderOpen size={14} />}
                       title="Manage Chat Files"
@@ -749,10 +773,12 @@ export function ChatArea() {
                         characterCount={chatCharIds.length}
                         layout="top"
                         onRetriggerTrackers={handleRerunTrackers}
+                        enabledAgentTypes={enabledAgentTypes}
                         mobileCompact
                       />
                       <ToolbarMenu>
                         <SummaryButton chatId={chat?.id ?? null} summary={chatMeta.summary ?? null} />
+                        <WorldInfoButton chatId={chat?.id ?? null} />
                         <RpToolbarButton
                           icon={<FolderOpen size={14} />}
                           title="Manage Chat Files"
@@ -789,6 +815,7 @@ export function ChatArea() {
                     <div className="pointer-events-auto">
                       <ToolbarMenu>
                         <SummaryButton chatId={chat?.id ?? null} summary={chatMeta.summary ?? null} />
+                        <WorldInfoButton chatId={chat?.id ?? null} />
                         <RpToolbarButton
                           icon={<FolderOpen size={14} />}
                           title="Manage Chat Files"
@@ -847,33 +874,47 @@ export function ChatArea() {
                   </div>
                 )}
 
-                {messages?.map((msg, i) => {
-                  const isRegenerating = isStreaming && regenerateMessageId === msg.id;
-                  const displayMsg = isRegenerating ? { ...msg, content: streamBuffer || "" } : msg;
-                  return (
-                    <div key={msg.id}>
-                      <ChatMessage
-                        message={displayMsg}
-                        isStreaming={isRegenerating}
-                        index={i}
-                        onDelete={handleDelete}
-                        onRegenerate={handleRegenerate}
-                        onEdit={handleEdit}
-                        onSetActiveSwipe={handleSetActiveSwipe}
-                        onToggleConversationStart={handleToggleConversationStart}
-                        onPeekPrompt={handlePeekPrompt}
-                        onBranch={handleBranch}
-                        isLastAssistantMessage={msg.id === lastAssistantMessageId}
-                        characterMap={characterMap}
-                        personaInfo={personaInfo}
-                        chatMode={chatMode}
-                        isGrouped={isGrouped(i)}
-                        groupChatMode={groupChatMode}
-                        chatCharacterIds={chatCharIds}
-                      />
-                    </div>
-                  );
-                })}
+                {(() => {
+                  // Only animate entry on the very first render with messages;
+                  // skip on subsequent refetches to avoid a visible flash when
+                  // optimistic messages are replaced by real server data.
+                  const shouldAnimate = !hasAnimatedRef.current;
+                  if (messages?.length) hasAnimatedRef.current = true;
+                  return messages?.map((msg, i) => {
+                    const isRegenerating = isStreaming && regenerateMessageId === msg.id;
+                    const displayMsg = isRegenerating ? { ...msg, content: streamBuffer || "" } : msg;
+                    return (
+                      <div
+                        key={msg.id}
+                        className={shouldAnimate ? "animate-message-in" : undefined}
+                        style={
+                          shouldAnimate
+                            ? { animationDelay: `${Math.min(i * 30, 200)}ms`, animationFillMode: "backwards" }
+                            : undefined
+                        }
+                      >
+                        <ChatMessage
+                          message={displayMsg}
+                          isStreaming={isRegenerating}
+                          onDelete={handleDelete}
+                          onRegenerate={handleRegenerate}
+                          onEdit={handleEdit}
+                          onSetActiveSwipe={handleSetActiveSwipe}
+                          onToggleConversationStart={handleToggleConversationStart}
+                          onPeekPrompt={handlePeekPrompt}
+                          onBranch={handleBranch}
+                          isLastAssistantMessage={msg.id === lastAssistantMessageId}
+                          characterMap={characterMap}
+                          personaInfo={personaInfo}
+                          chatMode={chatMode}
+                          isGrouped={isGrouped(i)}
+                          groupChatMode={groupChatMode}
+                          chatCharacterIds={chatCharIds}
+                        />
+                      </div>
+                    );
+                  });
+                })()}
 
                 {/* Streaming indicator */}
                 {isStreaming && !regenerateMessageId && (
@@ -883,14 +924,13 @@ export function ChatArea() {
                         id: "__streaming__",
                         chatId: activeChatId,
                         role: "assistant",
-                        characterId: streamingCharacterId ?? null,
+                        characterId: streamingCharacterId ?? chatCharIds[0] ?? null,
                         content: streamBuffer || "",
                         activeSwipeIndex: 0,
                         extra: { displayText: null, isGenerated: true, tokenCount: 0, generationInfo: null },
                         createdAt: new Date().toISOString(),
                       }}
                       isStreaming
-                      index={-1}
                       characterMap={characterMap}
                       personaInfo={personaInfo}
                       chatMode={chatMode}
@@ -943,6 +983,7 @@ export function ChatArea() {
             <div className="relative z-40 flex flex-col items-center gap-1.5 overflow-y-auto px-1.5 py-2 max-md:hidden">
               <div className="flex flex-col items-center gap-1">
                 <SummaryButton chatId={chat?.id ?? null} summary={chatMeta.summary ?? null} />
+                <WorldInfoButton chatId={chat?.id ?? null} />
                 <RpToolbarButton
                   icon={<FolderOpen size={14} />}
                   title="Manage Chat Files"
@@ -968,6 +1009,7 @@ export function ChatArea() {
                 characterCount={chatCharIds.length}
                 layout="right"
                 onRetriggerTrackers={handleRerunTrackers}
+                enabledAgentTypes={enabledAgentTypes}
               />
             </div>
           )}
@@ -985,7 +1027,7 @@ export function ChatArea() {
       )}
 
       {/* Agent thought bubbles (conversation only) */}
-      {!isRoleplay && <AgentThoughtBubbles />}
+      {!isRoleplay && <AgentThoughtBubbles enabledAgentTypes={enabledAgentTypes} />}
 
       {/* Pinned gallery images */}
       <PinnedImageOverlay activeChatId={activeChatId} />
@@ -1158,6 +1200,107 @@ function SummaryButton({ chatId, summary }: { chatId: string | null; summary: st
         <ScrollText size={14} />
       </button>
       {open && <SummaryPopover chatId={chatId} summary={summary} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+function WorldInfoButton({ chatId }: { chatId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useActiveLorebookEntries(chatId, open);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handle = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
+
+  if (!chatId) return null;
+  const entries = data?.entries ?? [];
+  const hasEntries = entries.length > 0;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "flex items-center justify-center rounded-full border p-1.5 backdrop-blur-md transition-all",
+          open
+            ? "bg-white/15 border-white/20 text-white/90"
+            : hasEntries && !isLoading
+              ? "bg-white/5 border-emerald-400/30 text-emerald-400/70 hover:bg-white/10 hover:text-emerald-300"
+              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white",
+        )}
+        title="Active World Info"
+      >
+        <Globe size={14} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-80 max-h-[60vh] overflow-y-auto rounded-xl border border-white/10 bg-black/90 p-3 shadow-2xl backdrop-blur-xl animate-message-in">
+          <h3 className="mb-2 text-xs font-semibold text-white/90 flex items-center gap-1.5">
+            <Globe size={12} />
+            Active World Info
+          </h3>
+          {isLoading ? (
+            <div className="flex items-center gap-2 py-4 text-xs text-white/40">
+              <Loader2 size={12} className="animate-spin" />
+              Scanning entries…
+            </div>
+          ) : entries.length === 0 ? (
+            <p className="py-3 text-center text-xs text-white/40">No active entries for this chat</p>
+          ) : (
+            <>
+              <p className="mb-2 text-[10px] text-white/40">
+                {entries.length} active • ~{(data?.totalTokens ?? 0).toLocaleString()} tokens
+              </p>
+              <div className="space-y-1.5">
+                {entries.map((entry) => (
+                  <WorldInfoEntryRow key={entry.id} entry={entry} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorldInfoEntryRow({
+  entry,
+}: {
+  entry: { name: string; keys: string[]; content: string; constant: boolean; order: number };
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div
+      className="rounded-lg bg-white/5 p-2 text-xs cursor-pointer transition-colors hover:bg-white/10"
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div className="flex items-center gap-2">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+        <span className="font-medium text-white/80 truncate">{entry.name}</span>
+        {entry.constant && (
+          <span className="rounded bg-amber-400/15 px-1 py-0.5 text-[8px] font-medium text-amber-400 shrink-0">
+            CONST
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-white/30 shrink-0">#{entry.order}</span>
+      </div>
+      {entry.keys.length > 0 && (
+        <p className="mt-0.5 truncate text-[10px] text-white/30">
+          Keys: {entry.keys.slice(0, 5).join(", ")}
+          {entry.keys.length > 5 && ` +${entry.keys.length - 5}`}
+        </p>
+      )}
+      {expanded && (
+        <p className="mt-1.5 whitespace-pre-wrap text-[11px] text-white/50 leading-relaxed border-t border-white/5 pt-1.5 max-h-40 overflow-y-auto">
+          {entry.content || "(empty)"}
+        </p>
+      )}
     </div>
   );
 }

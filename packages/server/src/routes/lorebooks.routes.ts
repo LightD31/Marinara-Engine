@@ -10,6 +10,8 @@ import {
 } from "@marinara-engine/shared";
 import type { ExportEnvelope } from "@marinara-engine/shared";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
+import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { processLorebooks } from "../services/lorebook/index.js";
 
 export async function lorebooksRoutes(app: FastifyInstance) {
   const storage = createLorebooksStorage(app.db);
@@ -128,5 +130,42 @@ export async function lorebooksRoutes(app: FastifyInstance) {
 
   app.get("/active/entries", async () => {
     return storage.listActiveEntries();
+  });
+
+  // ── Scan chat for activated entries ──
+
+  app.get<{ Params: { chatId: string } }>("/scan/:chatId", async (req, reply) => {
+    const { chatId } = req.params;
+    const chatsStorage = createChatsStorage(app.db);
+    const chatMessages = await chatsStorage.listMessages(chatId);
+    if (!chatMessages.length) return reply.send({ entries: [], totalTokens: 0, totalEntries: 0 });
+
+    const scanMessages = chatMessages.map((m) => ({
+      role: (m.role === "narrator" ? "system" : m.role) as string,
+      content: typeof m.content === "string" ? m.content : "",
+    }));
+
+    const result = await processLorebooks(app.db, scanMessages);
+
+    // Fetch full entry data for the activated IDs
+    const activeEntries = result.activatedEntryIds.length > 0
+      ? await Promise.all(
+          result.activatedEntryIds.map((id) => storage.getEntry(id)),
+        ).then((entries) => entries.filter(Boolean))
+      : [];
+
+    return {
+      entries: activeEntries.map((e) => ({
+        id: (e as Record<string, unknown>).id,
+        name: (e as Record<string, unknown>).name,
+        content: (e as Record<string, unknown>).content,
+        keys: (e as Record<string, unknown>).keys,
+        lorebookId: (e as Record<string, unknown>).lorebookId,
+        order: (e as Record<string, unknown>).order,
+        constant: (e as Record<string, unknown>).constant,
+      })),
+      totalTokens: result.totalTokensEstimate,
+      totalEntries: result.totalEntries,
+    };
   });
 }

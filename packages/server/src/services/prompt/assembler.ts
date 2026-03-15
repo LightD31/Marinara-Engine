@@ -97,6 +97,8 @@ export interface AssemblerInput {
   chatSummary?: string | null;
   /** Whether agents are enabled for this chat */
   enableAgents?: boolean;
+  /** Per-chat list of active agent type IDs (empty = use global enabled state) */
+  activeAgentIds?: string[];
 }
 
 /** Output of the assembler. */
@@ -191,6 +193,7 @@ export async function assemblePrompt(input: AssemblerInput): Promise<AssemblerOu
     chatSummary: input.chatSummary ?? null,
     wrapFormat,
     enableAgents: input.enableAgents ?? true,
+    activeAgentIds: input.activeAgentIds ?? [],
   };
 
   // ── Phase 1: Resolve sections in preset order ──

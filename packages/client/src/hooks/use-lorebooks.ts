@@ -136,3 +136,28 @@ export function useSearchLorebookEntries(query: string) {
     enabled: query.length >= 2,
   });
 }
+
+export interface ActiveLorebookEntry {
+  id: string;
+  name: string;
+  content: string;
+  keys: string[];
+  lorebookId: string;
+  order: number;
+  constant: boolean;
+}
+
+export interface ActiveLorebookScan {
+  entries: ActiveLorebookEntry[];
+  totalTokens: number;
+  totalEntries: number;
+}
+
+export function useActiveLorebookEntries(chatId: string | null, enabled = false) {
+  return useQuery({
+    queryKey: [...lorebookKeys.all, "active", chatId] as const,
+    queryFn: () => api.get<ActiveLorebookScan>(`/lorebooks/scan/${chatId}`),
+    enabled: !!chatId && enabled,
+    staleTime: 30_000,
+  });
+}

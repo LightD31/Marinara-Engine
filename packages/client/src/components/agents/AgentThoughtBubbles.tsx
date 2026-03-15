@@ -10,12 +10,17 @@ import { Sparkles, ChevronDown, ChevronUp, X } from "lucide-react";
 import { useAgentStore } from "../../stores/agent.store";
 import { cn } from "../../lib/utils";
 
-export function AgentThoughtBubbles() {
-  const thoughtBubbles = useAgentStore((s) => s.thoughtBubbles);
+export function AgentThoughtBubbles({ enabledAgentTypes }: { enabledAgentTypes?: Set<string> }) {
+  const allThoughtBubbles = useAgentStore((s) => s.thoughtBubbles);
   const isProcessing = useAgentStore((s) => s.isProcessing);
   const dismissThoughtBubble = useAgentStore((s) => s.dismissThoughtBubble);
   const clearThoughtBubbles = useAgentStore((s) => s.clearThoughtBubbles);
   const [collapsed, setCollapsed] = useState(false);
+
+  // Filter bubbles to only agents active in the current chat
+  const thoughtBubbles = enabledAgentTypes
+    ? allThoughtBubbles.filter((b) => enabledAgentTypes.has(b.agentId))
+    : allThoughtBubbles;
 
   if (thoughtBubbles.length === 0 && !isProcessing) return null;
 

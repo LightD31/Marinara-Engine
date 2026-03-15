@@ -7,8 +7,16 @@ import {
   type ChatOptions,
   type ChatCompletionResult,
   type LLMToolCall,
+  type LLMToolDefinition,
   type LLMUsage,
 } from "../base-provider.js";
+
+/**
+ * Models that ONLY support the Responses API (`/responses`) and not Chat Completions.
+ * Matching is case-insensitive.
+ */
+const RESPONSES_ONLY_PREFIXES = ["gpt-5.4-pro", "codex-"];
+const RESPONSES_ONLY_SUFFIXES = ["-codex", "-codex-max", "-codex-mini"];
 
 /**
  * Handles OpenAI, OpenRouter, Mistral, Cohere, and any OpenAI-compatible endpoint.
@@ -18,6 +26,12 @@ export class OpenAIProvider extends BaseLLMProvider {
   private isReasoningModel(model: string): boolean {
     const m = model.toLowerCase();
     return /^(o1|o3|o4)/.test(m) || m.startsWith("gpt-5");
+  }
+
+  /** Check if a model requires the Responses API instead of Chat Completions */
+  private useResponsesAPI(model: string): boolean {
+    const m = model.toLowerCase();
+    return RESPONSES_ONLY_PREFIXES.some((p) => m.startsWith(p)) || RESPONSES_ONLY_SUFFIXES.some((s) => m.endsWith(s));
   }
 
   private formatMessages(messages: ChatMessage[]) {
@@ -46,6 +60,11 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
+    // Route to Responses API for models that require it
+    if (this.useResponsesAPI(options.model)) {
+      return yield* this.chatResponses(messages, options);
+    }
+
     const url = `${this.baseUrl}/chat/completions`;
     const reasoning = this.isReasoningModel(options.model);
 
@@ -161,6 +180,11 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   /** Non-streaming completion with tool-call support */
   async chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
+    // Route to Responses API for models that require it
+    if (this.useResponsesAPI(options.model)) {
+      return this.chatCompleteResponses(messages, options);
+    }
+
     const url = `${this.baseUrl}/chat/completions`;
     const reasoning = this.isReasoningModel(options.model);
 
@@ -351,6 +375,467 @@ export class OpenAIProvider extends BaseLLMProvider {
       toolCalls,
       finishReason: finishReason === "tool_calls" ? "tool_calls" : finishReason,
       usage: streamUsage,
+    };
+  }
+
+  // ══════════════════════════════════════════════
+  // OpenAI Responses API (/responses)
+  // ══════════════════════════════════════════════
+
+  /**
+   * Convert chat-completion-style messages into Responses API `input` items.
+   * System messages are extracted into the top-level `instructions` field.
+   * Tool messages become `function_call_output` items.
+   * Assistant messages with tool_calls become `function_call` items.
+   */
+  private formatResponsesInput(messages: ChatMessage[]): {
+    instructions: string | undefined;
+    input: Array<Record<string, unknown>>;
+  } {
+    let instructions: string | undefined;
+    const input: Array<Record<string, unknown>> = [];
+
+    for (const m of messages) {
+      if (m.role === "system") {
+        // Merge all system messages into instructions
+        if (instructions) {
+          instructions += "\n\n" + m.content;
+        } else {
+          instructions = m.content;
+        }
+        continue;
+      }
+
+      if (m.role === "tool") {
+        // Tool result → function_call_output item
+        input.push({
+          type: "function_call_output",
+          call_id: m.tool_call_id,
+          output: m.content,
+        });
+        continue;
+      }
+
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        // First emit the text content if any
+        if (m.content) {
+          input.push({ role: "assistant", content: m.content });
+        }
+        // Then emit each tool call as a function_call item
+        for (const tc of m.tool_calls) {
+          input.push({
+            type: "function_call",
+            id: tc.id,
+            call_id: tc.id,
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+          });
+        }
+        continue;
+      }
+
+      if (m.role === "user" && m.images?.length) {
+        // Multimodal user message
+        const content: Array<Record<string, unknown>> = [];
+        if (m.content) content.push({ type: "input_text", text: m.content });
+        for (const img of m.images) {
+          content.push({ type: "input_image", image_url: img });
+        }
+        input.push({ role: "user", content });
+        continue;
+      }
+
+      // Regular user or assistant message
+      input.push({ role: m.role, content: m.content });
+    }
+
+    return { instructions, input };
+  }
+
+  /** Convert LLMToolDefinition[] to Responses API tool format */
+  private formatResponsesTools(tools: LLMToolDefinition[]): Array<Record<string, unknown>> {
+    return tools.map((t) => ({
+      type: "function",
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
+  }
+
+  /** Build the Responses API request body */
+  private buildResponsesBody(messages: ChatMessage[], options: ChatOptions): Record<string, unknown> {
+    const { instructions, input } = this.formatResponsesInput(messages);
+
+    const body: Record<string, unknown> = {
+      model: options.model,
+      input,
+      stream: options.stream ?? true,
+      store: false, // don't persist responses on OpenAI side
+    };
+
+    if (instructions) {
+      body.instructions = instructions;
+    }
+
+    if (options.maxTokens) {
+      body.max_output_tokens = options.maxTokens;
+    }
+
+    // Reasoning models don't use temperature/top_p
+    if (!this.isReasoningModel(options.model)) {
+      if (options.temperature != null) body.temperature = options.temperature;
+      if (options.topP != null) body.top_p = options.topP;
+    }
+
+    if (options.reasoningEffort) {
+      body.reasoning = { effort: options.reasoningEffort };
+    }
+
+    if (options.tools?.length) {
+      body.tools = this.formatResponsesTools(options.tools);
+    }
+
+    return body;
+  }
+
+  /**
+   * Streaming generation using the Responses API.
+   * SSE events use typed event names like `response.output_text.delta`.
+   */
+  private async *chatResponses(
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): AsyncGenerator<string, LLMUsage | void, unknown> {
+    const url = `${this.baseUrl}/responses`;
+    const body = this.buildResponsesBody(messages, options);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI Responses API error ${response.status}: ${errorText.slice(0, 500)}`);
+    }
+
+    if (!options.stream) {
+      // Non-streaming: parse the full response
+      const json = (await response.json()) as Record<string, unknown>;
+      const text = this.extractResponsesText(json);
+      if (text) yield text;
+      return this.extractResponsesUsage(json);
+    }
+
+    // Stream SSE
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamUsage: LLMUsage | undefined;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      let currentEvent = "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        // SSE event type line
+        if (trimmed.startsWith("event: ")) {
+          currentEvent = trimmed.slice(7);
+          continue;
+        }
+
+        if (!trimmed.startsWith("data: ")) {
+          if (trimmed === "") currentEvent = ""; // reset on blank line
+          continue;
+        }
+        const data = trimmed.slice(6);
+
+        try {
+          const parsed = JSON.parse(data) as Record<string, unknown>;
+
+          switch (currentEvent) {
+            case "response.output_text.delta": {
+              const delta = parsed.delta as string | undefined;
+              if (delta) yield delta;
+              break;
+            }
+            case "response.refusal.delta": {
+              // Treat refusals as regular text so the user sees the message
+              const delta = parsed.delta as string | undefined;
+              if (delta) yield delta;
+              break;
+            }
+            case "response.completed": {
+              // Extract usage from the completed response
+              const resp = parsed.response as Record<string, unknown> | undefined;
+              if (resp) {
+                streamUsage = this.extractResponsesUsage(resp);
+              }
+              break;
+            }
+            // Ignore other event types (response.created, response.in_progress, etc.)
+          }
+        } catch {
+          // Skip malformed JSON
+        }
+        currentEvent = "";
+      }
+    }
+
+    if (streamUsage) return streamUsage;
+  }
+
+  /**
+   * Non-streaming completion with tool-call support via the Responses API.
+   */
+  private async chatCompleteResponses(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> {
+    const url = `${this.baseUrl}/responses`;
+    const useStream = !!options.onToken;
+    const body = this.buildResponsesBody(messages, { ...options, stream: useStream });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI Responses API error ${response.status}: ${errorText.slice(0, 500)}`);
+    }
+
+    if (!useStream) {
+      // Non-streaming: parse the full response
+      const json = (await response.json()) as Record<string, unknown>;
+      return this.parseResponsesResult(json);
+    }
+
+    // Streaming path: stream text tokens, accumulate function calls
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const decoder = new TextDecoder();
+    let sseBuffer = "";
+    let content = "";
+    let finishReason = "stop";
+    let streamUsage: LLMUsage | undefined;
+    const functionCalls: LLMToolCall[] = [];
+    // Track in-progress function call argument deltas keyed by call_id
+    const fnCallArgs = new Map<string, { id: string; name: string; arguments: string }>();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop() ?? "";
+
+      let currentEvent = "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (trimmed.startsWith("event: ")) {
+          currentEvent = trimmed.slice(7);
+          continue;
+        }
+
+        if (!trimmed.startsWith("data: ")) {
+          if (trimmed === "") currentEvent = "";
+          continue;
+        }
+        const data = trimmed.slice(6);
+
+        try {
+          const parsed = JSON.parse(data) as Record<string, unknown>;
+
+          switch (currentEvent) {
+            case "response.output_text.delta": {
+              const delta = parsed.delta as string | undefined;
+              if (delta) {
+                content += delta;
+                options.onToken?.(delta);
+              }
+              break;
+            }
+
+            case "response.output_item.added": {
+              // A new output item appeared — could be a function_call
+              const item = parsed.item as Record<string, unknown> | undefined;
+              if (item?.type === "function_call") {
+                const callId = (item.call_id ?? item.id) as string;
+                fnCallArgs.set(callId, {
+                  id: callId,
+                  name: (item.name as string) ?? "",
+                  arguments: (item.arguments as string) ?? "",
+                });
+              }
+              break;
+            }
+
+            case "response.function_call_arguments.delta": {
+              const callId = parsed.call_id as string | undefined;
+              const delta = parsed.delta as string | undefined;
+              if (callId && delta) {
+                const entry = fnCallArgs.get(callId);
+                if (entry) entry.arguments += delta;
+              }
+              break;
+            }
+
+            case "response.function_call_arguments.done": {
+              const callId = parsed.call_id as string | undefined;
+              if (callId) {
+                const entry = fnCallArgs.get(callId);
+                if (entry) {
+                  // Overwrite with the final arguments if provided
+                  const args = parsed.arguments as string | undefined;
+                  if (args) entry.arguments = args;
+                }
+              }
+              break;
+            }
+
+            case "response.output_item.done": {
+              // Finalize function_call items
+              const item = parsed.item as Record<string, unknown> | undefined;
+              if (item?.type === "function_call") {
+                const callId = ((item.call_id ?? item.id) as string) ?? "";
+                const entry = fnCallArgs.get(callId);
+                functionCalls.push({
+                  id: callId,
+                  type: "function",
+                  function: {
+                    name: entry?.name ?? (item.name as string) ?? "",
+                    arguments: entry?.arguments ?? (item.arguments as string) ?? "",
+                  },
+                });
+              }
+              break;
+            }
+
+            case "response.completed": {
+              const resp = parsed.response as Record<string, unknown> | undefined;
+              if (resp) {
+                streamUsage = this.extractResponsesUsage(resp);
+                const status = resp.status as string | undefined;
+                if (status === "incomplete") finishReason = "length";
+              }
+              break;
+            }
+          }
+        } catch {
+          // Skip malformed JSON
+        }
+        currentEvent = "";
+      }
+    }
+
+    // Check if we got tool calls
+    if (functionCalls.length > 0) {
+      finishReason = "tool_calls";
+    }
+
+    return {
+      content: content || null,
+      toolCalls: functionCalls,
+      finishReason,
+      usage: streamUsage,
+    };
+  }
+
+  /** Extract output text from a non-streaming Responses API result */
+  private extractResponsesText(json: Record<string, unknown>): string {
+    // output_text is a convenience field
+    if (typeof json.output_text === "string") return json.output_text;
+
+    // Otherwise walk the output items
+    const output = json.output as Array<Record<string, unknown>> | undefined;
+    if (!output) return "";
+
+    let text = "";
+    for (const item of output) {
+      if (item.type === "message") {
+        const content = item.content as Array<Record<string, unknown>> | undefined;
+        if (content) {
+          for (const part of content) {
+            if (part.type === "output_text" && typeof part.text === "string") {
+              text += part.text;
+            }
+          }
+        }
+      }
+    }
+    return text;
+  }
+
+  /** Extract usage from a Responses API result */
+  private extractResponsesUsage(json: Record<string, unknown>): LLMUsage | undefined {
+    const usage = json.usage as Record<string, number> | undefined;
+    if (!usage) return undefined;
+    return {
+      promptTokens: usage.input_tokens ?? 0,
+      completionTokens: usage.output_tokens ?? 0,
+      totalTokens: usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0),
+    };
+  }
+
+  /** Parse a non-streaming Responses API result into ChatCompletionResult */
+  private parseResponsesResult(json: Record<string, unknown>): ChatCompletionResult {
+    const text = this.extractResponsesText(json);
+    const usage = this.extractResponsesUsage(json);
+    const output = json.output as Array<Record<string, unknown>> | undefined;
+
+    // Extract function calls from output items
+    const toolCalls: LLMToolCall[] = [];
+    if (output) {
+      for (const item of output) {
+        if (item.type === "function_call") {
+          toolCalls.push({
+            id: ((item.call_id ?? item.id) as string) ?? "",
+            type: "function",
+            function: {
+              name: (item.name as string) ?? "",
+              arguments: (item.arguments as string) ?? "",
+            },
+          });
+        }
+      }
+    }
+
+    const status = json.status as string | undefined;
+    let finishReason: string;
+    if (toolCalls.length > 0) {
+      finishReason = "tool_calls";
+    } else if (status === "incomplete") {
+      finishReason = "length";
+    } else {
+      finishReason = "stop";
+    }
+
+    return {
+      content: text || null,
+      toolCalls,
+      finishReason,
+      usage,
     };
   }
 }

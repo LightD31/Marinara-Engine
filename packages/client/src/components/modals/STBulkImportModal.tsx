@@ -17,6 +17,9 @@ import {
   AlertTriangle,
   Import,
   UserCircle,
+  ChevronRight,
+  ArrowLeft,
+  Folder,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "../../lib/utils";
@@ -121,6 +124,29 @@ export function STBulkImportModal({ open, onClose }: Props) {
   }, [folderPath]);
 
   const [picking, setPicking] = useState(false);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [browserPath, setBrowserPath] = useState("");
+  const [browserFolders, setBrowserFolders] = useState<string[]>([]);
+  const [browserLoading, setBrowserLoading] = useState(false);
+
+  const loadDirectory = useCallback(async (dirPath?: string) => {
+    setBrowserLoading(true);
+    try {
+      const res = await fetch("/api/import/list-directory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dirPath || "" }),
+      });
+      const data = (await res.json()) as { success: boolean; path?: string; folders?: string[] };
+      if (data.success && data.path) {
+        setBrowserPath(data.path);
+        setBrowserFolders(data.folders ?? []);
+      }
+    } catch {
+      // silent
+    }
+    setBrowserLoading(false);
+  }, []);
 
   const handleBrowse = useCallback(async () => {
     setPicking(true);
@@ -130,12 +156,17 @@ export function STBulkImportModal({ open, onClose }: Props) {
       const data = (await res.json()) as { success: boolean; path?: string; error?: string };
       if (data.success && data.path) {
         setFolderPath(data.path);
+        setPicking(false);
+        return;
       }
     } catch {
-      // silent — user can still type manually
+      // native picker failed
     }
     setPicking(false);
-  }, []);
+    // Native picker didn't return a path — fall back to directory browser
+    setShowFolderBrowser(true);
+    loadDirectory(folderPath || undefined);
+  }, [folderPath, loadDirectory]);
 
   const handleImport = useCallback(async () => {
     if (!folderPath.trim()) return;
@@ -236,6 +267,58 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 </button>
               </div>
             </div>
+
+            {/* ── Inline Folder Browser ── */}
+            {showFolderBrowser && (
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/50">
+                <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
+                  <button
+                    onClick={() => {
+                      const parent = browserPath.replace(/\/[^/]+$/, "") || "/";
+                      if (parent !== browserPath) loadDirectory(parent);
+                    }}
+                    disabled={browserLoading || browserPath === "/"}
+                    className="rounded p-1 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
+                    title="Go up"
+                  >
+                    <ArrowLeft size={12} />
+                  </button>
+                  <span className="flex-1 truncate text-[10px] font-mono text-[var(--muted-foreground)]">
+                    {browserPath || "/"}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setFolderPath(browserPath);
+                      setShowFolderBrowser(false);
+                    }}
+                    className="rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[10px] font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 active:scale-95"
+                  >
+                    Select This Folder
+                  </button>
+                </div>
+                <div className="max-h-48 overflow-y-auto p-1">
+                  {browserLoading ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
+                    </div>
+                  ) : browserFolders.length === 0 ? (
+                    <p className="py-3 text-center text-[10px] text-[var(--muted-foreground)]">No subfolders</p>
+                  ) : (
+                    browserFolders.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => loadDirectory(`${browserPath}/${name}`)}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--accent)]"
+                      >
+                        <Folder size={13} className="shrink-0 text-sky-400" />
+                        <span className="truncate">{name}</span>
+                        <ChevronRight size={11} className="ml-auto shrink-0 text-[var(--muted-foreground)]" />
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
 
             <button
               onClick={handleScan}

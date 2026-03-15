@@ -102,6 +102,8 @@ function GeneralSettings() {
   const setConfirmBeforeDelete = useUIStore((s) => s.setConfirmBeforeDelete);
   const messagesPerPage = useUIStore((s) => s.messagesPerPage);
   const setMessagesPerPage = useUIStore((s) => s.setMessagesPerPage);
+  const boldDialogue = useUIStore((s) => s.boldDialogue);
+  const setBoldDialogue = useUIStore((s) => s.setBoldDialogue);
 
   return (
     <div className="flex flex-col gap-3 animate-fade-in-up">
@@ -155,6 +157,15 @@ function GeneralSettings() {
         />
         <HelpTooltip text="How many messages to load at a time. Click 'Load More' in the chat to see older messages. Set to 0 to load all messages at once." />
       </label>
+
+      <ToggleSetting
+        label="Bold dialogue in quotes"
+        checked={boldDialogue ?? true}
+        onChange={setBoldDialogue}
+        help={
+          'When on, text inside quotation marks ("like this") is bolded and colored in chat messages. Turn off for plain text rendering.'
+        }
+      />
     </div>
   );
 }
@@ -795,6 +806,9 @@ function ThemesSettings() {
             </button>
             <button
               onClick={handleSave}
+              onPointerDown={() => {
+                if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+              }}
               className="flex items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-[10px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 active:scale-95"
             >
               <Save size={11} />

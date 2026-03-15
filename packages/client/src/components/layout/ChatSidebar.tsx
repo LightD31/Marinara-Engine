@@ -57,6 +57,7 @@ export function ChatSidebar() {
   const activeChatId = useChatStore((s) => s.activeChatId);
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
   const hasAnyDetailOpen = useUIStore((s) => s.hasAnyDetailOpen);
+  const editorDirty = useUIStore((s) => s.editorDirty);
   const closeAllDetails = useUIStore((s) => s.closeAllDetails);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const [searchQuery, setSearchQuery] = useState("");
@@ -192,7 +193,9 @@ export function ChatSidebar() {
                 key={chat.groupId ?? chat.id}
                 onClick={() => {
                   if (hasAnyDetailOpen()) {
-                    if (!window.confirm("You have an editor open. Any unsaved changes will be lost. Continue?")) return;
+                    if (editorDirty) {
+                      if (!window.confirm("You have unsaved changes. Discard and continue?")) return;
+                    }
                     closeAllDetails();
                   }
                   setActiveChatId(chat.id);

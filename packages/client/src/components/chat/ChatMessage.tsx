@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Chat: Message — mode-aware rendering
 // ──────────────────────────────────────────────
-import { cn } from "../../lib/utils";
+import { cn, getAvatarCropStyle } from "../../lib/utils";
 import {
   User,
   Bot,
@@ -36,7 +36,6 @@ interface PersonaInfo {
 interface ChatMessageProps {
   message: Message & { swipes?: Array<{ id: string; content: string }> };
   isStreaming?: boolean;
-  index: number;
   onDelete?: (messageId: string) => void;
   onRegenerate?: (messageId: string) => void;
   onEdit?: (messageId: string, content: string) => void;
@@ -64,9 +63,12 @@ function renderWithSpeakerTags(
   text: string,
   defaultDialogueColor: string | undefined,
   speakerColorMap: Map<string, string> | undefined,
+  boldDialogue = true,
 ): ReactNode[] {
+  const renderLine = boldDialogue ? highlightDialogue : (t: string) => applyInlineMarkdown(t, "m");
+
   if (!speakerColorMap || !SPEAKER_TAG_RE.test(text)) {
-    return highlightDialogue(text, defaultDialogueColor);
+    return renderLine(text, defaultDialogueColor);
   }
   SPEAKER_TAG_RE.lastIndex = 0;
 
@@ -78,19 +80,19 @@ function renderWithSpeakerTags(
   while ((match = SPEAKER_TAG_RE.exec(text)) !== null) {
     // Text before the speaker tag — use default color
     if (match.index > lastIndex) {
-      nodes.push(...highlightDialogue(text.slice(lastIndex, match.index), defaultDialogueColor));
+      nodes.push(...renderLine(text.slice(lastIndex, match.index), defaultDialogueColor));
     }
     const speakerName = match[1]!;
     const dialogue = match[2]!;
     const speakerColor = speakerColorMap.get(speakerName) ?? defaultDialogueColor;
     // Render the dialogue content (without the tags) using the speaker's color
-    nodes.push(<span key={`s${key++}`}>{highlightDialogue(dialogue, speakerColor)}</span>);
+    nodes.push(<span key={`s${key++}`}>{renderLine(dialogue, speakerColor)}</span>);
     lastIndex = match.index + match[0].length;
   }
 
   // Remaining text after last speaker tag
   if (lastIndex < text.length) {
-    nodes.push(...highlightDialogue(text.slice(lastIndex), defaultDialogueColor));
+    nodes.push(...renderLine(text.slice(lastIndex), defaultDialogueColor));
   }
 
   return nodes;
@@ -183,7 +185,12 @@ const HTML_TAG_RE =
  * Render message content, handling both plain text with dialogue highlighting
  * and HTML blocks that should be rendered as actual HTML.
  */
-function renderContent(text: string, dialogueColor?: string, speakerColorMap?: Map<string, string>): ReactNode {
+function renderContent(
+  text: string,
+  dialogueColor?: string,
+  speakerColorMap?: Map<string, string>,
+  boldDialogue = true,
+): ReactNode {
   // Normalise curly quotes to straight so they display consistently
   const normalized = text.replace(/[“”„‟]/g, '"').replace(/[‘’]/g, "'");
 
@@ -199,13 +206,13 @@ function renderContent(text: string, dialogueColor?: string, speakerColorMap?: M
           {hrParts.map((part, i) => (
             <span key={i}>
               {i > 0 && <hr className="my-3 border-t border-[var(--border)]" />}
-              {renderWithSpeakerTags(part, dialogueColor, speakerColorMap)}
+              {renderWithSpeakerTags(part, dialogueColor, speakerColorMap, boldDialogue)}
             </span>
           ))}
         </>
       );
     }
-    return <>{renderWithSpeakerTags(normalized, dialogueColor, speakerColorMap)}</>;
+    return <>{renderWithSpeakerTags(normalized, dialogueColor, speakerColorMap, boldDialogue)}</>;
   }
 
   // For HTML content, strip speaker tags before sanitizing
@@ -223,17 +230,19 @@ function renderContent(text: string, dialogueColor?: string, speakerColorMap?: M
 
   // Apply dialogue bolding inside sanitised HTML, but skip text already
   // wrapped in a <font color="..."> tag so author-specified colors take priority.
-  const boldColor = dialogueColor ?? "white";
-  const withDialogue = clean.replace(/(?<![=\w])"([^"<>]+)"/g, (match, inner, offset) => {
-    // Find the last opening tag before this match — if it's an unclosed <font color=...>, skip
-    const before = clean.slice(0, offset);
-    const lastFontOpen = before.lastIndexOf("<font ");
-    if (lastFontOpen !== -1) {
-      const lastFontClose = before.lastIndexOf("</font>");
-      if (lastFontClose < lastFontOpen) return match; // we're inside a <font> tag
-    }
-    return `<strong style="color:${boldColor}">"${inner}"</strong>`;
-  });
+  const withDialogue = boldDialogue
+    ? clean.replace(/(?<![=\w])"([^"<>]+)"/g, (match, inner, offset) => {
+        const boldColor = dialogueColor ?? "white";
+        // Find the last opening tag before this match — if it's an unclosed <font color=...>, skip
+        const before = clean.slice(0, offset);
+        const lastFontOpen = before.lastIndexOf("<font ");
+        if (lastFontOpen !== -1) {
+          const lastFontClose = before.lastIndexOf("</font>");
+          if (lastFontClose < lastFontOpen) return match; // we're inside a <font> tag
+        }
+        return `<strong style="color:${boldColor}">"${inner}"</strong>`;
+      })
+    : clean;
 
   // Convert *** horizontal rules to <hr> tags in HTML path
   const withHr = withDialogue.replace(
@@ -266,7 +275,6 @@ function nameColorStyle(color?: string): React.CSSProperties | undefined {
 export const ChatMessage = memo(function ChatMessage({
   message,
   isStreaming,
-  index,
   onDelete,
   onRegenerate,
   onEdit,
@@ -391,6 +399,7 @@ export const ChatMessage = memo(function ChatMessage({
 
   const displayName = isUser ? userName : charName;
   const avatarUrl = isUser ? (personaInfo?.avatarUrl ?? null) : (charInfo?.avatarUrl ?? null);
+  const avatarCropStyle = isUser ? {} : getAvatarCropStyle(charInfo?.avatarCrop);
 
   // Resolve colors: character colors for assistant, persona colors for user
   const msgColors = isUser ? personaInfo : charInfo;
@@ -414,7 +423,13 @@ export const ChatMessage = memo(function ChatMessage({
   const isMergedGroup = groupChatMode === "merged" && !isUser && chatCharacterIds && chatCharacterIds.length > 1;
   const mergedAvatars = useMemo(() => {
     if (!isMergedGroup || !characterMap || !chatCharacterIds) return [];
-    return chatCharacterIds.map((id) => characterMap.get(id)?.avatarUrl).filter(Boolean) as string[];
+    return chatCharacterIds
+      .map((id) => {
+        const info = characterMap.get(id);
+        if (!info?.avatarUrl) return null;
+        return { url: info.avatarUrl, crop: info.avatarCrop };
+      })
+      .filter(Boolean) as { url: string; crop?: { zoom: number; offsetX: number; offsetY: number } | null }[];
   }, [isMergedGroup, characterMap, chatCharacterIds]);
   const mergedNameColors = useMemo(() => {
     if (!isMergedGroup || !characterMap || !chatCharacterIds) return [];
@@ -494,9 +509,10 @@ export const ChatMessage = memo(function ChatMessage({
   // Render content with dialogue highlighting (or HTML rendering)
   const text = typeof displayContent === "string" ? displayContent : message.content;
   const isHtmlContent = HTML_TAG_RE.test(text);
+  const boldDialogue = useUIStore((s) => s.boldDialogue) ?? true;
   const renderedContent = useMemo(() => {
-    return renderContent(text, dialogueColor, speakerColorMap);
-  }, [text, dialogueColor, speakerColorMap]);
+    return renderContent(text, dialogueColor, speakerColorMap, boldDialogue);
+  }, [text, dialogueColor, speakerColorMap, boldDialogue]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
@@ -538,12 +554,7 @@ export const ChatMessage = memo(function ChatMessage({
     // Narrator messages
     if (isNarrator) {
       return (
-        <div
-          ref={msgRef}
-          className="rpg-narrator-msg group animate-message-in mb-4 px-2"
-          style={{ animationDelay: `${Math.min(index * 30, 200)}ms`, animationFillMode: "backwards" }}
-          onClick={handleMobileTap}
-        >
+        <div ref={msgRef} className="rpg-narrator-msg group mb-4 px-2" onClick={handleMobileTap}>
           <div className="relative rounded-xl border border-amber-500/10 bg-black/40 px-5 py-4">
             {/* Delete button */}
             {onDelete && (
@@ -578,35 +589,37 @@ export const ChatMessage = memo(function ChatMessage({
       <>
         <div
           ref={msgRef}
-          className={cn("group mb-4 flex gap-3 animate-message-in px-2", isUser && "flex-row-reverse")}
-          style={{ animationDelay: `${Math.min(index * 30, 200)}ms`, animationFillMode: "backwards" }}
+          className={cn("group mb-4 flex gap-3 px-2", isUser && "flex-row-reverse")}
           onClick={handleMobileTap}
         >
           {/* Avatar Column */}
           {!isGrouped && (
             <div className="flex-shrink-0 pt-1">
               {isMergedGroup && mergedAvatars.length > 0 ? (
-                <div className="rpg-avatar-glow relative h-10 w-10">
-                  {mergedAvatars.map((url, i) => (
+                <div className="rpg-avatar-glow relative h-10 w-10 overflow-hidden rounded-full ring-2 ring-white/10">
+                  {mergedAvatars.map((avatar, i) => (
                     <img
-                      key={url}
+                      key={avatar.url}
                       ref={(el) => {
                         mergedAvatarRefs.current[i] = el;
                       }}
-                      src={url}
+                      src={avatar.url}
                       alt="Group"
-                      className="absolute inset-0 h-10 w-10 rounded-full object-cover ring-2 ring-white/10 transition-opacity duration-700"
-                      style={{ opacity: i === 0 ? 1 : 0 }}
+                      className="absolute inset-0 h-10 w-10 object-cover transition-opacity duration-700"
+                      style={{ opacity: i === 0 ? 1 : 0, ...getAvatarCropStyle(avatar.crop) }}
                     />
                   ))}
                 </div>
               ) : avatarUrl ? (
                 <div className={cn(!isUser && "rpg-avatar-glow")}>
-                  <img
-                    src={avatarUrl}
-                    alt={displayName}
-                    className="h-10 w-10 rounded-full object-cover ring-2 ring-white/10"
-                  />
+                  <div className="h-10 w-10 overflow-hidden rounded-full ring-2 ring-white/10">
+                    <img
+                      src={avatarUrl}
+                      alt={displayName}
+                      className="h-full w-full object-cover"
+                      style={avatarCropStyle}
+                    />
+                  </div>
                 </div>
               ) : (
                 <div
@@ -817,12 +830,7 @@ export const ChatMessage = memo(function ChatMessage({
   return (
     <div
       ref={msgRef}
-      className={cn(
-        "group flex animate-message-in",
-        isUser ? "justify-end" : "justify-start",
-        isGrouped ? "mb-0.5" : "mb-3",
-      )}
-      style={{ animationDelay: `${Math.min(index * 30, 200)}ms`, animationFillMode: "backwards" }}
+      className={cn("group flex", isUser ? "justify-end" : "justify-start", isGrouped ? "mb-0.5" : "mb-3")}
       onClick={handleMobileTap}
     >
       <div className={cn("flex max-w-[72%] gap-2", isUser && "flex-row-reverse", editing && "w-[85%] max-w-[85%]")}>
@@ -830,22 +838,24 @@ export const ChatMessage = memo(function ChatMessage({
         {(!isUser || avatarUrl) && (
           <div className={cn("flex-shrink-0 self-end", isGrouped && "invisible")}>
             {isMergedGroup && mergedAvatars.length > 0 ? (
-              <div className="relative h-8 w-8">
-                {mergedAvatars.map((url, i) => (
+              <div className="relative h-8 w-8 overflow-hidden rounded-full">
+                {mergedAvatars.map((avatar, i) => (
                   <img
-                    key={url}
+                    key={avatar.url}
                     ref={(el) => {
                       mergedAvatarRefs.current[i] = el;
                     }}
-                    src={url}
+                    src={avatar.url}
                     alt="Group"
-                    className="absolute inset-0 h-8 w-8 rounded-full object-cover transition-opacity duration-700"
-                    style={{ opacity: i === 0 ? 1 : 0 }}
+                    className="absolute inset-0 h-8 w-8 object-cover transition-opacity duration-700"
+                    style={{ opacity: i === 0 ? 1 : 0, ...getAvatarCropStyle(avatar.crop) }}
                   />
                 ))}
               </div>
             ) : avatarUrl ? (
-              <img src={avatarUrl} alt={displayName} className="h-8 w-8 rounded-full object-cover" />
+              <div className="h-8 w-8 overflow-hidden rounded-full">
+                <img src={avatarUrl} alt={displayName} className="h-full w-full object-cover" style={avatarCropStyle} />
+              </div>
             ) : (
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-[11px] font-bold text-[var(--muted-foreground)]">
                 {displayName[0]}

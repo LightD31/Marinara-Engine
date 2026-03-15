@@ -2,7 +2,7 @@
 // Database Connection
 // ──────────────────────────────────────────────
 import * as schema from "./schema/index.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DATA_DIR } from "../utils/data-dir.js";
 
@@ -35,19 +35,75 @@ async function createWithBetterSqlite3(dbPath: string): Promise<DrizzleDB> {
   return drizzle(sqlite, { schema }) as unknown as DrizzleDB;
 }
 
+async function createWithSqlJs(dbPath: string): Promise<DrizzleDB> {
+  const initSqlJs = (await import("sql.js")).default;
+  const { drizzle } = await import("drizzle-orm/sql-js");
+
+  const SQL = await initSqlJs();
+
+  // Load existing database from disk if it exists
+  let sqlDb;
+  if (existsSync(dbPath)) {
+    const fileBuffer = readFileSync(dbPath);
+    sqlDb = new SQL.Database(fileBuffer);
+  } else {
+    sqlDb = new SQL.Database();
+  }
+
+  sqlDb.run("PRAGMA journal_mode = WAL");
+  sqlDb.run("PRAGMA synchronous = NORMAL");
+  sqlDb.run("PRAGMA busy_timeout = 5000");
+
+  // Persist to disk periodically and on process exit
+  const save = () => {
+    try {
+      const data = sqlDb.export();
+      const buffer = Buffer.from(data);
+      writeFileSync(dbPath, buffer);
+    } catch {
+      // Non-fatal — log but don't crash
+      console.error("[sql.js] Failed to persist database to disk");
+    }
+  };
+
+  // Auto-save every 30 seconds
+  const timer = setInterval(save, 30_000);
+  timer.unref(); // Don't prevent process exit
+
+  // Save on clean shutdown
+  process.on("beforeExit", save);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.once(sig, () => {
+      save();
+      process.exit(0);
+    });
+  }
+
+  return drizzle(sqlDb, { schema }) as unknown as DrizzleDB;
+}
+
 async function createDB(dbPath: string): Promise<DrizzleDB> {
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  // If explicitly requested (e.g. Termux), skip libsql entirely
-  if (process.env.DATABASE_DRIVER === "better-sqlite3") {
+  const driver = process.env.DATABASE_DRIVER;
+
+  // Explicit driver selection
+  if (driver === "better-sqlite3") {
     return createWithBetterSqlite3(dbPath);
   }
+  if (driver === "sql.js") {
+    return createWithSqlJs(dbPath);
+  }
 
-  // Default: try libsql, fall back to better-sqlite3
+  // Default: try libsql → better-sqlite3 → sql.js
   try {
     return await createWithLibsql(dbPath);
   } catch {
-    return createWithBetterSqlite3(dbPath);
+    try {
+      return await createWithBetterSqlite3(dbPath);
+    } catch {
+      return await createWithSqlJs(dbPath);
+    }
   }
 }
 

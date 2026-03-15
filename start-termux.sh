@@ -106,92 +106,57 @@ if [ ! -d "node_modules" ] || [ "$TERMUX_FORCE_INSTALL" = "1" ]; then
     pnpm install
 fi
 
-# ── Ensure better-sqlite3 native binary ──
-# @libsql/client has no Android ARM64 binary, so we fall back to better-sqlite3.
-# We ship a prebuilt .node binary to avoid needing build tools on the phone.
-export DATABASE_DRIVER="better-sqlite3"
+# ── Ensure SQLite driver for Termux ──
+# @libsql/client has no Android ARM64 binary, so we need an alternative.
+# Priority: better-sqlite3 (fast, native) → sql.js (pure JS, always works)
+USE_SQLJS=0
 
 BS3_PKG=$(find node_modules -path "*/better-sqlite3/package.json" -not -path "*/.cache/*" 2>/dev/null | head -1)
-if [ -n "$BS3_PKG" ]; then
-    BS3_DIR=$(dirname "$BS3_PKG")
+[ -n "$BS3_PKG" ] && BS3_DIR=$(dirname "$BS3_PKG")
+
+# --- Check if better-sqlite3 already works ---
+if [ -n "$BS3_DIR" ] && [ -f "$BS3_DIR/build/Release/better_sqlite3.node" ] && \
+   node -e "require('$BS3_DIR/build/Release/better_sqlite3.node')" 2>/dev/null; then
+    echo "  [OK] better-sqlite3 native binary verified"
+    export DATABASE_DRIVER="better-sqlite3"
 else
-    echo "  [..] Installing better-sqlite3 (required for Termux)..."
-    pnpm --filter @marinara-engine/server add -O better-sqlite3@"^11.0.0" 2>&1 || true
-    BS3_PKG=$(find node_modules -path "*/better-sqlite3/package.json" -not -path "*/.cache/*" 2>/dev/null | head -1)
-    [ -n "$BS3_PKG" ] && BS3_DIR=$(dirname "$BS3_PKG")
-fi
-
-if [ -z "$BS3_DIR" ]; then
-    echo "  [ERR] Could not install better-sqlite3."
-    echo "        Try manually: pnpm --filter @marinara-engine/server add -O better-sqlite3"
-    exit 1
-fi
-
-if [ ! -f "$BS3_DIR/build/Release/better_sqlite3.node" ] || \
-   ! node -e "require('$BS3_DIR/build/Release/better_sqlite3.node')" 2>/dev/null; then
-    mkdir -p "$BS3_DIR/build/Release"
-    rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
-
-    NEED_SOURCE_BUILD=0
-
-    # --- Try 1: Download prebuilt binary from GitHub releases ---
-    PREBUILT_URL="https://github.com/SpicyMarinara/Marinara-Engine/releases/latest/download/better_sqlite3-android-arm64.node"
-    echo "  [..] Downloading prebuilt better-sqlite3 for Android ARM64..."
-    if curl -fSL --connect-timeout 15 --max-time 120 \
-         -o "$BS3_DIR/build/Release/better_sqlite3.node" \
-         "$PREBUILT_URL" 2>/dev/null; then
-        # Verify the binary actually loads with the current Node.js version
-        if node -e "require('$BS3_DIR/build/Release/better_sqlite3.node')" 2>/dev/null; then
-            echo "  [OK] Prebuilt binary downloaded and verified"
-        else
-            rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
-            echo "  [WARN] Prebuilt binary is not compatible with Node.js $(node -v) (ABI mismatch)."
-            echo "         Falling back to compiling from source."
-            NEED_SOURCE_BUILD=1
-        fi
-    else
-        rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
-        echo "  [WARN] Prebuilt not available — compiling from source."
-        NEED_SOURCE_BUILD=1
+    # --- Try downloading prebuilt binary ---
+    if [ -z "$BS3_DIR" ]; then
+        echo "  [..] Installing better-sqlite3..."
+        pnpm --filter @marinara-engine/server add -O better-sqlite3@"^11.0.0" 2>&1 || true
+        BS3_PKG=$(find node_modules -path "*/better-sqlite3/package.json" -not -path "*/.cache/*" 2>/dev/null | head -1)
+        [ -n "$BS3_PKG" ] && BS3_DIR=$(dirname "$BS3_PKG")
     fi
 
-    if [ "$NEED_SOURCE_BUILD" = "1" ]; then
-        echo "         This takes 2-5 minutes. Please wait."
+    if [ -n "$BS3_DIR" ]; then
+        mkdir -p "$BS3_DIR/build/Release"
+        rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
 
-        # --- Try 2: Compile from source (needs build tools) ---
-        for pkg_name in python build-essential; do
-            if ! dpkg -s "$pkg_name" &>/dev/null; then
-                echo "  [..] Installing $pkg_name..."
-                pkg install -y "$pkg_name" 2>/dev/null || true
-            fi
-        done
-
-        # Symlink node-addon-api so binding.gyp can resolve it from pnpm's virtual store
-        if [ ! -d "$BS3_DIR/node_modules/node-addon-api" ]; then
-            NAPI_DIR=$(find node_modules -path "*/node-addon-api/napi.h" 2>/dev/null | head -1)
-            if [ -n "$NAPI_DIR" ]; then
-                mkdir -p "$BS3_DIR/node_modules"
-                ln -sf "$(cd "$(dirname "$NAPI_DIR")" && pwd)" "$BS3_DIR/node_modules/node-addon-api"
-            fi
+        PREBUILT_URL="https://github.com/SpicyMarinara/Marinara-Engine/releases/latest/download/better_sqlite3-android-arm64.node"
+        echo "  [..] Downloading prebuilt better-sqlite3 for Android ARM64..."
+        if curl -fSL --connect-timeout 15 --max-time 120 \
+             -o "$BS3_DIR/build/Release/better_sqlite3.node" \
+             "$PREBUILT_URL" 2>/dev/null && \
+           node -e "require('$BS3_DIR/build/Release/better_sqlite3.node')" 2>/dev/null; then
+            echo "  [OK] Prebuilt binary downloaded and verified"
+            export DATABASE_DRIVER="better-sqlite3"
+        else
+            rm -f "$BS3_DIR/build/Release/better_sqlite3.node"
+            echo "  [WARN] Prebuilt binary not available or incompatible with Node.js $(node -v)."
+            USE_SQLJS=1
         fi
+    else
+        USE_SQLJS=1
+    fi
 
-        if ! command -v node-gyp &>/dev/null; then
-            npm install -g node-gyp
+    if [ "$USE_SQLJS" = "1" ]; then
+        echo "  [..] Using sql.js (pure JavaScript SQLite — no compilation needed)"
+        # Ensure sql.js is installed
+        if ! node -e "require.resolve('sql.js')" 2>/dev/null; then
+            pnpm --filter @marinara-engine/server add -O sql.js@"^1.12.0" 2>&1 || true
         fi
-
-        # Force Linux build path — Termux's Node 22+ reports platform=android
-        # which triggers the Android NDK code path in binding.gyp.
-        export GYP_DEFINES="OS=linux"
-        (cd "$BS3_DIR" && node-gyp rebuild --release --loglevel=verbose) || {
-            echo ""
-            echo "  [ERR] Failed to compile better-sqlite3."
-            echo "        Make sure build tools are installed:"
-            echo "          pkg install build-essential python"
-            echo "        Then delete node_modules and try again:"
-            echo "          rm -rf node_modules && ./start-termux.sh"
-            exit 1
-        }
-        echo "  [OK] better-sqlite3 compiled from source"
+        export DATABASE_DRIVER="sql.js"
+        echo "  [OK] sql.js ready"
     fi
 fi
 
@@ -251,8 +216,8 @@ export NODE_ENV=production
 export PORT=${PORT:-7860}
 export HOST=${HOST:-0.0.0.0}
 
-# Use better-sqlite3 on Termux — @libsql/client has no Android ARM64 native binary
-export DATABASE_DRIVER=${DATABASE_DRIVER:-better-sqlite3}
+# DATABASE_DRIVER was set above during SQLite driver detection
+export DATABASE_DRIVER=${DATABASE_DRIVER:-sql.js}
 
 # Open in Termux browser if available (no-op if not)
 if command -v termux-open-url &> /dev/null; then

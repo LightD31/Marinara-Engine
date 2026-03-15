@@ -1,6 +1,7 @@
 // ──────────────────────────────────────────────
 // Layout: Right Panel (polished with panel transitions)
 // ──────────────────────────────────────────────
+import { useEffect, useRef } from "react";
 import { X, Users, BookOpen, FileText, Link, Sparkles, Settings, UserCircle } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
 import { CharactersPanel } from "../panels/CharactersPanel";
@@ -35,7 +36,14 @@ export function RightPanel() {
   const panel = useUIStore((s) => s.rightPanel);
   const close = useUIStore((s) => s.closeRightPanel);
 
-  const PanelComponent = PANELS[panel];
+  // Keep track of which panels have been visited so we can keep them mounted (hidden)
+  // instead of unmounting/remounting — this prevents the stagger-children animation
+  // from replaying every time you switch tabs.
+  const mountedRef = useRef(new Set<string>([panel]));
+  useEffect(() => {
+    mountedRef.current.add(panel);
+  }, [panel]);
+
   const config = PANEL_CONFIG[panel] ?? { title: "Panel", icon: null, gradient: "from-slate-400 to-slate-500" };
 
   return (
@@ -59,8 +67,18 @@ export function RightPanel() {
         </button>
       </div>
 
-      {/* Content */}
-      <div className="relative flex-1 overflow-y-auto">{PanelComponent ? <PanelComponent /> : null}</div>
+      {/* Content — keep visited panels mounted but hidden to avoid re-animation */}
+      <div className="relative flex-1 overflow-hidden">
+        {Object.entries(PANELS).map(([key, PanelComp]) => {
+          if (!mountedRef.current.has(key)) return null;
+          const active = key === panel;
+          return (
+            <div key={key} className={active ? "h-full overflow-y-auto" : "hidden"}>
+              <PanelComp />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -97,12 +97,15 @@ const COMMANDS: SlashCommand[] = [
   {
     name: "narrator",
     aliases: ["narrate", "nar"],
-    description: "Insert a narrator message",
-    usage: "/narrator <message>",
-    local: true,
+    description: "Steer the narrative — the AI will narrate events in the direction you describe",
+    usage: "/narrator <direction>",
     async execute(args, ctx) {
-      if (!args.trim()) return { handled: true, feedback: "Usage: /narrator <message text>" };
-      ctx.createMessage({ role: "narrator", content: args.trim() });
+      if (!args.trim()) return { handled: true, feedback: "Usage: /narrator <direction to steer the narrative>" };
+      await ctx.generate({
+        chatId: ctx.chatId,
+        connectionId: null,
+        userMessage: `[Narrator instruction — do not include a reply from {{user}}. Instead, write the next part of the narrative steering it toward the following: ${args.trim()}]`,
+      });
       return { handled: true };
     },
   },
@@ -150,6 +153,21 @@ const COMMANDS: SlashCommand[] = [
         chatId: ctx.chatId,
         connectionId: null,
         impersonate: true,
+      });
+      return { handled: true };
+    },
+  },
+  {
+    name: "random",
+    aliases: ["rand", "event"],
+    description: "Introduce a random event to shake up the plot",
+    usage: "/random",
+    async execute(_args, ctx) {
+      await ctx.generate({
+        chatId: ctx.chatId,
+        connectionId: null,
+        userMessage:
+          "[Narrator instruction — do not include a reply from {{user}}. Instead: And now, something completely different. Introduce a random, unexpected event to stir up the plot. Be creative and surprising — throw a curveball that keeps things interesting!]",
       });
       return { handled: true };
     },

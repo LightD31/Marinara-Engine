@@ -78,6 +78,10 @@ export function RegexScriptEditor() {
   const [localMaxDepth, setLocalMaxDepth] = useState<number | null>(null);
 
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);

@@ -301,6 +301,8 @@ export async function chatsRoutes(app: FastifyInstance) {
             personaDescription,
             personaFields,
             chatMessages: mappedMessages,
+            enableAgents: chatMeta.enableAgents === true,
+            activeAgentIds: Array.isArray(chatMeta.activeAgentIds) ? (chatMeta.activeAgentIds as string[]) : [],
           });
 
           return { messages: assembled.messages, parameters: assembled.parameters, generationInfo: null };

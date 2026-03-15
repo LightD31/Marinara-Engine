@@ -279,12 +279,7 @@ export function useGenerate() {
               break;
             }
 
-            case "game_state": {
-              const gs = event.data as Record<string, unknown>;
-              setGameState(gs as any);
-              break;
-            }
-
+            case "game_state":
             case "game_state_patch": {
               const patch = event.data as Record<string, unknown>;
               const current = useGameStateStore.getState().current;
@@ -296,8 +291,8 @@ export function useGenerate() {
                 }
                 setGameState(merged as any);
               } else {
-                // Character-tracker/persona-stats may arrive before world-state creates
-                // the base game state — seed a minimal state so data isn't lost.
+                // Agent data may arrive before the base game state is loaded —
+                // seed a minimal state so data isn't lost.
                 setGameState(patch as any);
               }
               break;
@@ -467,10 +462,7 @@ export function useGenerate() {
               );
               break;
             }
-            case "game_state": {
-              setGameState(event.data as any);
-              break;
-            }
+            case "game_state":
             case "game_state_patch": {
               const patch = event.data as Record<string, unknown>;
               const current = useGameStateStore.getState().current;

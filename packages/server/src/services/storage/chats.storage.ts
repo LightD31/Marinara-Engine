@@ -3,9 +3,14 @@
 // ──────────────────────────────────────────────
 import { eq, desc, and, lt, sql, count } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
-import { chats, messages, messageSwipes } from "../../db/schema/index.js";
+import { chats, messages, messageSwipes, chatImages } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
+import { existsSync, rmSync } from "fs";
+import { join } from "path";
+import { DATA_DIR } from "../../utils/data-dir.js";
 import type { CreateChatInput, CreateMessageInput } from "@marinara-engine/shared";
+
+const GALLERY_DIR = join(DATA_DIR, "gallery");
 
 export function createChatsStorage(db: DB) {
   return {
@@ -75,11 +80,24 @@ export function createChatsStorage(db: DB) {
     },
 
     async remove(id: string) {
+      // Clean up gallery images (DB records + files on disk)
+      await db.delete(chatImages).where(eq(chatImages.chatId, id));
+      const galleryDir = join(GALLERY_DIR, id);
+      if (existsSync(galleryDir)) rmSync(galleryDir, { recursive: true, force: true });
+
       await db.delete(chats).where(eq(chats.id, id));
     },
 
     /** Delete all chats in a group (all branches). */
     async removeGroup(groupId: string) {
+      // Find all chat IDs in this group, then clean up their gallery data
+      const groupChats = await db.select({ id: chats.id }).from(chats).where(eq(chats.groupId, groupId));
+      for (const chat of groupChats) {
+        await db.delete(chatImages).where(eq(chatImages.chatId, chat.id));
+        const galleryDir = join(GALLERY_DIR, chat.id);
+        if (existsSync(galleryDir)) rmSync(galleryDir, { recursive: true, force: true });
+      }
+
       await db.delete(chats).where(eq(chats.groupId, groupId));
     },
 

@@ -30,6 +30,8 @@ export interface MarkerContext {
   wrapFormat: WrapFormat;
   /** When false, agent_data markers expand to empty strings */
   enableAgents: boolean;
+  /** Per-chat list of active agent type IDs (empty = use global enabled state) */
+  activeAgentIds: string[];
 }
 
 /** Expanded marker result. */
@@ -293,6 +295,11 @@ async function expandAgentData(config: MarkerConfig, ctx: MarkerContext): Promis
   const agentType = config.agentType;
   if (!agentType) return { content: "" };
 
+  // Per-chat active agent filter: if a per-chat list is set, only include agents in that list
+  if (ctx.activeAgentIds.length > 0 && !ctx.activeAgentIds.includes(agentType)) {
+    return { content: "" };
+  }
+
   // Special case: world-state uses game_state_snapshots for richer structured data
   if (agentType === "world-state") {
     const wsStorage = createAgentsStorage(ctx.db);
@@ -325,8 +332,8 @@ async function expandAgentData(config: MarkerConfig, ctx: MarkerContext): Promis
 }
 
 async function expandWorldStateAgent(ctx: MarkerContext): Promise<ExpandedMarker> {
-  // Only use committed game state — uncommitted snapshots from swipes/regens
-  // are never shown so the prompt stays clean between swipes.
+  // Prefer committed game state — uncommitted snapshots from swipes/regens
+  // are normally skipped so the prompt stays clean between swipes.
   const committedRows = await ctx.db
     .select()
     .from(gameStateSnapshots)
@@ -334,7 +341,21 @@ async function expandWorldStateAgent(ctx: MarkerContext): Promise<ExpandedMarker
     .orderBy(desc(gameStateSnapshots.createdAt))
     .limit(1);
 
-  const snap = committedRows[0];
+  let snap = committedRows[0];
+
+  // Fallback: if no committed snapshot exists yet (e.g. first agent run),
+  // use the latest snapshot regardless of committed status so world state
+  // data isn't silently dropped until the next user message.
+  if (!snap) {
+    const anyRows = await ctx.db
+      .select()
+      .from(gameStateSnapshots)
+      .where(eq(gameStateSnapshots.chatId, ctx.chatId))
+      .orderBy(desc(gameStateSnapshots.createdAt))
+      .limit(1);
+    snap = anyRows[0];
+  }
+
   if (!snap) return { content: "" };
 
   const parts: string[] = [];

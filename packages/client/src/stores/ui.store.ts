@@ -57,6 +57,8 @@ interface UIState {
   personaDetailId: string | null;
   /** When set, the main area shows the full-page regex script editor */
   regexDetailId: string | null;
+  /** True when any open detail editor has unsaved changes */
+  editorDirty: boolean;
 
   // ── Settings (persisted) ──
   fontSize: FontSize;
@@ -74,6 +76,8 @@ interface UIState {
   confirmBeforeDelete: boolean;
   /** Number of messages to load per page (0 = load all) */
   messagesPerPage: number;
+  /** Bold and color text inside quotation marks in chat messages */
+  boldDialogue: boolean;
 
   // ── Visual Theme ──
   visualTheme: VisualTheme;
@@ -136,6 +140,8 @@ interface UIState {
   hasAnyDetailOpen: () => boolean;
   /** Close all detail editors at once */
   closeAllDetails: () => void;
+  /** Update the editor dirty flag (called by detail editors when their dirty state changes) */
+  setEditorDirty: (dirty: boolean) => void;
 
   // Settings actions
   setFontSize: (size: FontSize) => void;
@@ -149,6 +155,7 @@ interface UIState {
   setShowModelName: (v: boolean) => void;
   setConfirmBeforeDelete: (v: boolean) => void;
   setMessagesPerPage: (n: number) => void;
+  setBoldDialogue: (v: boolean) => void;
   setVisualTheme: (v: VisualTheme) => void;
   setEnterToSend: (v: boolean) => void;
   setWeatherEffects: (v: boolean) => void;
@@ -185,6 +192,7 @@ export const useUIStore = create<UIState>()(
       toolDetailId: null,
       personaDetailId: null,
       regexDetailId: null,
+      editorDirty: false,
 
       // Settings defaults
       fontSize: 17 as FontSize,
@@ -198,6 +206,7 @@ export const useUIStore = create<UIState>()(
       showModelName: false,
       confirmBeforeDelete: true,
       messagesPerPage: 20,
+      boldDialogue: true,
       visualTheme: "default" as VisualTheme,
       enterToSend: true,
       weatherEffects: true,
@@ -239,7 +248,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeCharacterDetail: () => set({ characterDetailId: null }),
+      closeCharacterDetail: () => set({ characterDetailId: null, editorDirty: false }),
       openLorebookDetail: (id) =>
         set({
           lorebookDetailId: id,
@@ -251,7 +260,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeLorebookDetail: () => set({ lorebookDetailId: null }),
+      closeLorebookDetail: () => set({ lorebookDetailId: null, editorDirty: false }),
       openPresetDetail: (id) =>
         set({
           presetDetailId: id,
@@ -263,7 +272,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closePresetDetail: () => set({ presetDetailId: null }),
+      closePresetDetail: () => set({ presetDetailId: null, editorDirty: false }),
       openConnectionDetail: (id) =>
         set({
           connectionDetailId: id,
@@ -275,7 +284,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeConnectionDetail: () => set({ connectionDetailId: null }),
+      closeConnectionDetail: () => set({ connectionDetailId: null, editorDirty: false }),
       openAgentDetail: (agentType) =>
         set({
           agentDetailId: agentType,
@@ -288,7 +297,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeAgentDetail: () => set({ agentDetailId: null }),
+      closeAgentDetail: () => set({ agentDetailId: null, editorDirty: false }),
       openToolDetail: (id) =>
         set({
           toolDetailId: id,
@@ -301,7 +310,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeToolDetail: () => set({ toolDetailId: null }),
+      closeToolDetail: () => set({ toolDetailId: null, editorDirty: false }),
       openPersonaDetail: (id) =>
         set({
           personaDetailId: id,
@@ -314,7 +323,7 @@ export const useUIStore = create<UIState>()(
           regexDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closePersonaDetail: () => set({ personaDetailId: null }),
+      closePersonaDetail: () => set({ personaDetailId: null, editorDirty: false }),
       openRegexDetail: (id) =>
         set({
           regexDetailId: id,
@@ -327,7 +336,7 @@ export const useUIStore = create<UIState>()(
           toolDetailId: null,
           ...(window.innerWidth < 768 && { rightPanelOpen: false }),
         }),
-      closeRegexDetail: () => set({ regexDetailId: null }),
+      closeRegexDetail: () => set({ regexDetailId: null, editorDirty: false }),
 
       hasAnyDetailOpen: () => {
         const s = get();
@@ -352,7 +361,9 @@ export const useUIStore = create<UIState>()(
           toolDetailId: null,
           personaDetailId: null,
           regexDetailId: null,
+          editorDirty: false,
         }),
+      setEditorDirty: (dirty) => set({ editorDirty: dirty }),
 
       // Settings actions
       setFontSize: (size) => set({ fontSize: size }),
@@ -366,6 +377,7 @@ export const useUIStore = create<UIState>()(
       setShowModelName: (v) => set({ showModelName: v }),
       setConfirmBeforeDelete: (v) => set({ confirmBeforeDelete: v }),
       setMessagesPerPage: (n) => set({ messagesPerPage: n }),
+      setBoldDialogue: (v) => set({ boldDialogue: v }),
       setVisualTheme: (v) => set({ visualTheme: v }),
       setEnterToSend: (v) => set({ enterToSend: v }),
       setWeatherEffects: (v) => set({ weatherEffects: v }),
@@ -420,6 +432,7 @@ export const useUIStore = create<UIState>()(
         showModelName: state.showModelName,
         confirmBeforeDelete: state.confirmBeforeDelete,
         messagesPerPage: state.messagesPerPage,
+        boldDialogue: state.boldDialogue,
         visualTheme: state.visualTheme,
         enterToSend: state.enterToSend,
         weatherEffects: state.weatherEffects,

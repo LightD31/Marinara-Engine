@@ -62,6 +62,10 @@ export function ConnectionEditor() {
   const fetchModels = useFetchModels();
 
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -307,11 +311,11 @@ export function ConnectionEditor() {
       <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
         <button
           onClick={handleClose}
-          className="rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
+          className="shrink-0 rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-500 text-white shadow-sm">
           <Link size={18} />
         </div>
         <input
@@ -320,27 +324,29 @@ export function ConnectionEditor() {
             setLocalName(e.target.value);
             markDirty();
           }}
-          className="flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)]"
+          className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)]"
           placeholder="Connection name…"
         />
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           {saveError && (
             <span className="mr-2 flex items-center gap-1 text-[10px] font-medium text-red-400">
-              <AlertCircle size={11} /> Save failed
+              <AlertCircle size={11} /> <span className="max-md:hidden">Save failed</span>
             </span>
           )}
           {savedFlash && !dirty && (
             <span className="mr-2 flex items-center gap-1 text-[10px] font-medium text-emerald-400">
-              <Check size={11} /> Saved
+              <Check size={11} /> <span className="max-md:hidden">Saved</span>
             </span>
           )}
-          {dirty && !saveError && <span className="mr-2 text-[10px] font-medium text-amber-400">Unsaved</span>}
+          {dirty && !saveError && (
+            <span className="mr-2 text-[10px] font-medium text-amber-400 max-md:hidden">Unsaved</span>
+          )}
           <button
             onClick={handleSave}
             disabled={updateConnection.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-sky-400 to-blue-500 px-4 py-2 text-xs font-medium text-white shadow-md transition-all hover:shadow-lg active:scale-[0.98] disabled:opacity-50"
           >
-            <Save size={13} /> Save
+            <Save size={13} /> <span className="max-md:hidden">Save</span>
           </button>
           <button
             onClick={handleDelete}
@@ -353,7 +359,7 @@ export function ConnectionEditor() {
 
       {/* Unsaved warning */}
       {showUnsavedWarning && (
-        <div className="flex items-center justify-between bg-amber-500/10 px-4 py-2 text-xs text-amber-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 px-4 py-2 text-xs text-amber-400">
           <span>You have unsaved changes.</span>
           <div className="flex gap-2">
             <button
@@ -393,7 +399,7 @@ export function ConnectionEditor() {
       )}
 
       {/* ── Body ── */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 max-md:p-4">
         <div className="mx-auto max-w-2xl space-y-6">
           {/* ── Connection Name ── */}
           <FieldGroup
@@ -431,7 +437,7 @@ export function ConnectionEditor() {
                     markDirty();
                   }}
                   className={cn(
-                    "rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
+                    "truncate rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
                     localProvider === key
                       ? "bg-sky-400/15 text-sky-400 ring-1 ring-sky-400/30"
                       : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
@@ -671,12 +677,11 @@ export function ConnectionEditor() {
                             {remoteModels.length > 0 && (
                               <div className="mt-2 max-h-48 overflow-y-auto">
                                 {remoteModels
-                                  .filter(
-                                    (m) =>
-                                      !modelSearch.trim() ||
-                                      m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
-                                      m.name.toLowerCase().includes(modelSearch.toLowerCase()),
-                                  )
+                                  .filter((m) => {
+                                    const q = (modelSearch || localModel).trim().toLowerCase();
+                                    if (!q) return true;
+                                    return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+                                  })
                                   .map((m) => (
                                     <button
                                       key={m.id}

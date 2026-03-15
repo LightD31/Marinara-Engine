@@ -296,6 +296,9 @@ export async function generateRoutes(app: FastifyInstance) {
 
       // Determine whether agents are enabled for this chat (needed by assembler + agent pipeline)
       const chatEnableAgents = chatMeta.enableAgents === true;
+      const chatActiveAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds)
+        ? (chatMeta.activeAgentIds as string[])
+        : [];
 
       if (presetId) {
         const preset = await presets.getById(presetId);
@@ -322,6 +325,7 @@ export async function generateRoutes(app: FastifyInstance) {
             chatMessages: mappedMessages,
             chatSummary: (chatMeta.summary as string) ?? null,
             enableAgents: chatEnableAgents,
+            activeAgentIds: chatActiveAgentIds,
           };
 
           const assembled = await assemblePrompt(assemblerInput);
@@ -361,9 +365,6 @@ export async function generateRoutes(app: FastifyInstance) {
       // ────────────────────────────────────────
       // Agent Pipeline: resolve enabled agents
       // ────────────────────────────────────────
-      const chatActiveAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds)
-        ? (chatMeta.activeAgentIds as string[])
-        : [];
       const hasPerChatAgentList = chatActiveAgentIds.length > 0;
       const perChatAgentSet = new Set(chatActiveAgentIds);
 
@@ -373,14 +374,10 @@ export async function generateRoutes(app: FastifyInstance) {
           : await agentsStore.listEnabled()
         : [];
 
-      // Also include built-in agents that are enabled by default but have no DB row yet.
-      // We must check ALL configs (not just enabled) so that explicitly-disabled
-      // built-ins are not re-added as defaults.
+      // Also check ALL configs so that explicitly-disabled built-ins are not
+      // re-added as defaults for the no-per-chat-list path.
       const allConfigs = chatEnableAgents ? await agentsStore.list() : [];
       const allConfigTypes = new Set(allConfigs.map((c: any) => c.type));
-      const defaultEnabledBuiltIns = chatEnableAgents
-        ? BUILT_IN_AGENTS.filter((a) => a.enabledByDefault && !allConfigTypes.has(a.id))
-        : [];
 
       // Build ResolvedAgent array — each agent gets its own provider/model or falls back to chat connection
       const resolvedAgents: ResolvedAgent[] = [];
@@ -420,9 +417,21 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // Built-in agents with no DB row → use defaults
-      for (const builtIn of defaultEnabledBuiltIns) {
-        // If this chat has a per-chat agent list, only include agents in that list
-        if (hasPerChatAgentList && !perChatAgentSet.has(builtIn.id)) continue;
+      // This covers two cases:
+      //   1. enabledByDefault agents that were never customized (original behavior)
+      //   2. Per-chat list agents that exist in activeAgentIds but have no DB row yet
+      const resolvedTypes = new Set(resolvedAgents.map((a) => a.type));
+      const builtInFallbacks = chatEnableAgents
+        ? BUILT_IN_AGENTS.filter((a) => {
+            // Already resolved from a DB row — skip
+            if (resolvedTypes.has(a.id)) return false;
+            // If we have a per-chat list, include if the agent is in that list
+            if (hasPerChatAgentList) return perChatAgentSet.has(a.id);
+            // No per-chat list — only include enabledByDefault agents without a DB row
+            return a.enabledByDefault && !allConfigTypes.has(a.id);
+          })
+        : [];
+      for (const builtIn of builtInFallbacks) {
         resolvedAgents.push({
           id: `builtin:${builtIn.id}`,
           type: builtIn.id,
@@ -558,10 +567,11 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // Get current game state (if any)
-      // Only use "committed" game state — locked in when the user sent their
-      // last message. Uncommitted snapshots (from previous swipes/regens) are
-      // never used, so swipes always generate from a clean baseline.
-      const latestGameState = await gameStateStore.getLatestCommitted(input.chatId);
+      // Prefer committed game state (locked in when the user sent their last
+      // message), but fall back to the latest snapshot so agents still receive
+      // prior state before anything has been committed (e.g. first turn).
+      const latestGameState =
+        (await gameStateStore.getLatestCommitted(input.chatId)) ?? (await gameStateStore.getLatest(input.chatId));
       const gameState = latestGameState ? parseGameStateRow(latestGameState as Record<string, unknown>) : null;
 
       // Build base agent context (without mainResponse — that comes after generation)
@@ -1503,18 +1513,18 @@ export async function generateRoutes(app: FastifyInstance) {
           // Add as a system message at the end (just before any trailing user message)
           messagesWithInstruction.push({ role: "system", content: charInstruction });
 
-          const { savedMsg, response } = await generateForCharacter(charId, messagesWithInstruction);
-          lastSavedMsg = savedMsg;
-          allResponses.push(response);
+          const genResult = await generateForCharacter(charId, messagesWithInstruction);
+          lastSavedMsg = genResult.savedMsg;
+          allResponses.push(genResult.response);
 
           // Add this character's response to the running context for the next character
-          runningMessages.push({ role: "assistant", content: response });
+          runningMessages.push({ role: "assistant", content: genResult.response });
         }
       } else {
         // Single/merged: one generation
         const targetCharId = characterIds[0] ?? null;
-        const { savedMsg } = await generateForCharacter(targetCharId, finalMessages);
-        lastSavedMsg = savedMsg;
+        const genResult = await generateForCharacter(targetCharId, finalMessages);
+        lastSavedMsg = genResult.savedMsg;
         allResponses.push(fullResponse);
       }
 

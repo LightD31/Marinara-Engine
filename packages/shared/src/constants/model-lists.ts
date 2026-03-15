@@ -16,6 +16,12 @@ export interface KnownModel {
 // ── OpenAI (from #model_openai_select) ──
 
 export const OPENAI_MODELS: KnownModel[] = [
+  // GPT-5.4
+  { id: "gpt-5.4", name: "gpt-5.4", context: 1050000, maxOutput: 128000 },
+  { id: "gpt-5.4-2026-03-05", name: "gpt-5.4-2026-03-05", context: 1050000, maxOutput: 128000 },
+  // GPT-5.4 Pro (Responses API only)
+  { id: "gpt-5.4-pro", name: "gpt-5.4-pro", context: 1050000, maxOutput: 128000 },
+  { id: "gpt-5.4-pro-2026-03-05", name: "gpt-5.4-pro-2026-03-05", context: 1050000, maxOutput: 128000 },
   // GPT-5.2
   { id: "gpt-5.2", name: "gpt-5.2", context: 1000000, maxOutput: 32768 },
   { id: "gpt-5.2-2025-12-11", name: "gpt-5.2-2025-12-11", context: 1000000, maxOutput: 32768 },
@@ -61,6 +67,14 @@ export const OPENAI_MODELS: KnownModel[] = [
   { id: "o3-mini-2025-01-31", name: "o3-mini-2025-01-31", context: 200000, maxOutput: 100000 },
   { id: "o4-mini", name: "o4-mini", context: 200000, maxOutput: 100000 },
   { id: "o4-mini-2025-04-16", name: "o4-mini-2025-04-16", context: 200000, maxOutput: 100000 },
+  // Codex (Responses API only)
+  { id: "gpt-5.3-codex", name: "gpt-5.3-codex", context: 400000, maxOutput: 128000 },
+  { id: "gpt-5.2-codex", name: "gpt-5.2-codex", context: 400000, maxOutput: 128000 },
+  { id: "gpt-5.1-codex", name: "gpt-5.1-codex", context: 400000, maxOutput: 128000 },
+  { id: "gpt-5.1-codex-max", name: "gpt-5.1-codex-max", context: 400000, maxOutput: 128000 },
+  { id: "gpt-5.1-codex-mini", name: "gpt-5.1-codex-mini", context: 400000, maxOutput: 128000 },
+  { id: "gpt-5-codex", name: "gpt-5-codex", context: 400000, maxOutput: 128000 },
+  { id: "codex-mini-latest", name: "codex-mini-latest", context: 200000, maxOutput: 100000 },
   // GPT-4.5
   { id: "gpt-4.5-preview", name: "gpt-4.5-preview", context: 128000, maxOutput: 16384 },
   { id: "gpt-4.5-preview-2025-02-27", name: "gpt-4.5-preview-2025-02-27", context: 128000, maxOutput: 16384 },

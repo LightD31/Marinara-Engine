@@ -8,7 +8,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCharacterSprites, type SpriteInfo } from "../../hooks/use-characters";
 import { detectExpression } from "./SpriteOverlay";
-import { cn } from "../../lib/utils";
+import { cn, getAvatarCropStyle } from "../../lib/utils";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import type { CharacterMap } from "./ChatArea";
 
@@ -215,14 +215,19 @@ function ExpressionSprite({
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4">
         {info?.avatarUrl ? (
-          <img
-            src={info.avatarUrl}
-            alt={info.name}
+          <div
             className={cn(
-              "h-32 w-32 rounded-2xl object-cover shadow-lg",
+              "h-32 w-32 overflow-hidden rounded-2xl shadow-lg",
               isRoleplay ? "ring-2 ring-white/10" : "ring-2 ring-[var(--border)]",
             )}
-          />
+          >
+            <img
+              src={info.avatarUrl}
+              alt={info.name}
+              className="h-full w-full object-cover"
+              style={getAvatarCropStyle(info.avatarCrop)}
+            />
+          </div>
         ) : (
           <div
             className={cn(

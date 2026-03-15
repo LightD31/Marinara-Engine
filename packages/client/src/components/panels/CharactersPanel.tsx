@@ -35,7 +35,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
-import { cn } from "../../lib/utils";
+import { cn, getAvatarCropStyle } from "../../lib/utils";
 
 type CharacterRow = { id: string; data: string; avatarPath: string | null; createdAt: string; updatedAt: string };
 type GroupRow = { id: string; name: string; description: string; characterIds: string; avatarPath: string | null };
@@ -264,7 +264,7 @@ export function CharactersPanel() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search characters\u2026"
+            placeholder="Search characters"
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--secondary)] py-2 pl-8 pr-3 text-xs outline-none transition-colors placeholder:text-[var(--muted-foreground)]/50 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
           />
         </div>
@@ -626,9 +626,14 @@ export function CharactersPanel() {
               )}
             >
               {/* Avatar */}
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 text-white shadow-sm">
+              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 text-white shadow-sm">
                 {avatarUrl ? (
-                  <img src={avatarUrl} alt={charName} className="h-full w-full rounded-xl object-cover" />
+                  <img
+                    src={avatarUrl}
+                    alt={charName}
+                    className="h-full w-full object-cover"
+                    style={getAvatarCropStyle(char.parsed.extensions?.avatarCrop as { zoom: number; offsetX: number; offsetY: number } | undefined)}
+                  />
                 ) : (
                   <User size={16} />
                 )}

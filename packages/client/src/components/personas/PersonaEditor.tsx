@@ -84,6 +84,10 @@ export function PersonaEditor() {
   const [formData, setFormData] = useState<PersonaFormData | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [saving, setSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -181,7 +185,7 @@ export function PersonaEditor() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-[var(--background)]">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3 max-md:gap-2 max-md:px-3">
         <button
           onClick={handleClose}
           className="rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
@@ -192,7 +196,7 @@ export function PersonaEditor() {
 
         {/* Avatar */}
         <div
-          className="group relative flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 shadow-md shadow-emerald-500/20"
+          className="group relative flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 shadow-md shadow-emerald-500/20 max-md:h-10 max-md:w-10"
           onClick={() => fileInputRef.current?.click()}
         >
           {avatarPreview ? (
@@ -258,7 +262,7 @@ export function PersonaEditor() {
           )}
         >
           <Save size={13} />
-          {saving ? "Saving…" : "Save"}
+          <span className="max-md:hidden">{saving ? "Saving…" : "Save"}</span>
         </button>
       </div>
 

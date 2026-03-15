@@ -129,6 +129,10 @@ export function PresetEditor() {
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [dirty, setDirty] = useState(false);
+  const setEditorDirty = useUIStore((s) => s.setEditorDirty);
+  useEffect(() => {
+    setEditorDirty(dirty);
+  }, [dirty, setEditorDirty]);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -242,15 +246,15 @@ export function PresetEditor() {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3 max-md:gap-2 max-md:px-3">
         <button
           onClick={handleClose}
           className="rounded-xl p-2 transition-all hover:bg-[var(--accent)] active:scale-95"
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-400 to-violet-500 text-white shadow-sm">
-          <FileText size={18} />
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-400 to-violet-500 text-white shadow-sm max-md:h-8 max-md:w-8">
+          <FileText size={18} className="max-md:!h-[14px] max-md:!w-[14px]" />
         </div>
         <input
           value={localName}
@@ -259,7 +263,7 @@ export function PresetEditor() {
             setLocalName(e.target.value);
             markDirty();
           }}
-          className="flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)]"
+          className="flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-[var(--muted-foreground)] max-md:text-base"
           placeholder="Preset name…"
         />
         <div className="flex items-center gap-1.5">
@@ -333,9 +337,9 @@ export function PresetEditor() {
       )}
 
       {/* ── Body: Tab rail + Content ── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden max-md:flex-col">
         {/* Tab rail */}
-        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-2">
+        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-2 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:border-r-0 max-md:border-b max-md:p-1.5">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             return (
@@ -343,7 +347,7 @@ export function PresetEditor() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-medium transition-all",
+                  "flex items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-medium transition-all max-md:whitespace-nowrap max-md:px-2.5 max-md:py-1.5",
                   activeTab === tab.id
                     ? "bg-gradient-to-r from-purple-400/15 to-violet-500/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/20"
                     : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
@@ -357,7 +361,7 @@ export function PresetEditor() {
         </nav>
 
         {/* Content area */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 max-md:p-4">
           <div className="mx-auto max-w-2xl space-y-6">
             {/* ── Overview Tab ── */}
             {activeTab === "overview" && (
@@ -2408,11 +2412,16 @@ function ToggleOption({
       </div>
       <div
         className={cn(
-          "flex h-5 w-9 items-center rounded-full px-0.5 transition-colors",
+          "relative h-5 w-9 shrink-0 rounded-full transition-colors",
           value ? "bg-purple-400" : "bg-[var(--border)]",
         )}
       >
-        <div className={cn("h-4 w-4 rounded-full bg-white shadow transition-transform", value && "translate-x-4")} />
+        <div
+          className={cn(
+            "absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+            value && "translate-x-4",
+          )}
+        />
       </div>
     </button>
   );
