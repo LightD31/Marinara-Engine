@@ -154,7 +154,7 @@ export function ChatSidebar() {
   }, [handleNewChat, activeTab]);
 
   return (
-    <nav data-component="ChatSidebar" aria-label="Chat navigation" className="flex h-full flex-col">
+    <nav data-component="ChatSidebar" aria-label="Chat navigation" className="mari-chat-sidebar flex h-full flex-col">
       {/* Header */}
       <div className="relative flex h-12 items-center justify-between px-4">
         <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />

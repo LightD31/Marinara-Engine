@@ -37,6 +37,8 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
   const [feedback, setFeedback] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resizeRafRef = useRef<number>(0);
   const activeChatId = useChatStore((s) => s.activeChatId);
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreamingGlobal = useChatStore((s) => s.isStreaming);
@@ -80,6 +82,10 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
   useEffect(() => {
     const textarea = textareaRef.current;
     return () => {
+      // Cancel pending debounce/rAF
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      cancelAnimationFrame(resizeRafRef.current);
+      // Flush draft synchronously
       const chatId = useChatStore.getState().activeChatId;
       if (chatId && textarea) {
         const text = textarea.value;
@@ -148,6 +154,8 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
   const handleSend = useCallback(async () => {
     const raw = getValue();
     if (!activeChatId || isStreaming) return;
+    // Cancel pending draft debounce so clearInputDraft isn't overwritten
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
 
     const hasText = raw.trim().length > 0;
     const hasFiles = attachments.length > 0;
@@ -280,18 +288,27 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
     const nowHasInput = fixed.trim().length > 0;
     setHasInput((prev) => (prev === nowHasInput ? prev : nowHasInput));
 
-    // Keep draft in sync so it survives remounts
+    // Keep draft in sync so it survives remounts (debounced to avoid store churn)
     if (activeChatId) {
-      if (nowHasInput) {
-        setInputDraft(activeChatId, fixed);
-      } else {
-        clearInputDraft(activeChatId);
-      }
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      const chatId = activeChatId;
+      const text = fixed;
+      draftTimerRef.current = setTimeout(() => {
+        if (text.trim()) {
+          setInputDraft(chatId, text);
+        } else {
+          clearInputDraft(chatId);
+        }
+      }, 300);
     }
 
-    // Auto-resize textarea
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    // Auto-resize textarea (schedule via rAF to avoid layout thrashing)
+    cancelAnimationFrame(resizeRafRef.current);
+    resizeRafRef.current = requestAnimationFrame(() => {
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    });
 
     // Slash command autocomplete
     const trimmed = fixed.trim();
@@ -300,7 +317,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
       setCompletions(matches);
       setSelectedCompletion(0);
     } else {
-      setCompletions([]);
+      setCompletions((prev) => (prev.length === 0 ? prev : []));
     }
   };
 
@@ -312,7 +329,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
   const _isRP = mode === "roleplay";
 
   return (
-    <div className="chat-input-container p-3">
+    <div className="mari-chat-input chat-input-container p-3">
       {/* Slash command autocomplete popup */}
       {completions.length > 0 && (
         <div className="mb-2 overflow-hidden rounded-xl border border-white/10 bg-black/80 shadow-xl backdrop-blur-xl">
@@ -380,7 +397,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
       {/* Main input container */}
       <div
         className={cn(
-          "relative flex items-center gap-2 rounded-2xl border-2 px-4 py-2.5 transition-all duration-200",
+          "mari-chat-input-box relative flex items-center gap-2 rounded-2xl border-2 px-4 py-2.5 transition-all duration-200",
           "bg-black/40",
           hasInput || attachments.length ? "border-blue-400/30 shadow-md shadow-blue-500/5" : "border-white/25",
         )}
@@ -418,7 +435,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           rows={1}
           spellCheck
           autoCorrect="on"
-          className="max-h-[12.5rem] flex-1 resize-none bg-transparent py-0 text-sm leading-normal text-white/90 placeholder:text-white/30 outline-none disabled:cursor-not-allowed disabled:opacity-40"
+          className="mari-chat-input-textarea max-h-[12.5rem] flex-1 resize-none bg-transparent py-0 text-sm leading-normal text-white/90 placeholder:text-white/30 outline-none disabled:cursor-not-allowed disabled:opacity-40"
         />
 
         {/* Send / Stop button */}
@@ -426,7 +443,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           onClick={isStreaming ? () => useChatStore.getState().stopGeneration() : handleSend}
           disabled={(!hasInput && !attachments.length && !isStreaming && !canRetry) || !activeChatId}
           className={cn(
-            "flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200",
+            "mari-chat-send-btn flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200",
             isStreaming
               ? "text-white hover:opacity-80"
               : (hasInput || attachments.length || canRetry) && activeChatId

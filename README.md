@@ -52,6 +52,26 @@
 
 ## Changelog
 
+### v1.4.3
+
+**Added:**
+
+- **Message Translation** — Translate any message with a single click. Supports four providers: Google Translate (free), DeepL API (free & pro), DeepLX (self-hosted), and AI (via any configured LLM connection). Configure per-chat in Chat Settings → Translation section.
+- **Scene Lorebook Inheritance** — Scenes now automatically inherit lorebooks from the parent conversation, so world-building context carries over seamlessly into scenes.
+- **Scene Discard Confirmation** — The Discard button on active scenes now shows an inline "Discard scene? Yes / No" confirmation to prevent accidental discards.
+
+**Bug Fixes:**
+
+- **Depth Range Regex** — Regex scripts with `minDepth` / `maxDepth` now work correctly. Depth filtering was defined in types and UI but never implemented in the client or server processing loops.
+- **HTML Spacing on Mobile** — Fixed extra vertical gaps appearing in HTML content on Android/mobile. Formatting newlines between HTML block tags were being converted to `<br>` elements with margins; they are now stripped.
+
+**Security:**
+
+- **Translation URL Validation** — DeepLX URL input is validated as a proper HTTP/HTTPS URL to prevent SSRF.
+- **Google Translate Length Guard** — Added a 5,000 character limit for the Google Translate provider to prevent silent failures from URL length limits.
+
+---
+
 ### v1.4.2
 
 **Added:**
@@ -74,7 +94,7 @@
 
 ## Windows EASIEST METHOD
 
-Download **[Marinara-Engine-Installer-1.4.2.exe](https://github.com/SpicyMarinara/Marinara-Engine/releases/download/v1.4.2/Marinara-Engine-Installer-1.4.2.exe)** from the [Releases](https://github.com/SpicyMarinara/Marinara-Engine/releases) page and run it. The installer checks for Node.js and Git, clones the repo, installs dependencies, builds the app, and creates a desktop shortcut.
+Download **[Marinara-Engine-Installer-1.4.3.exe](https://github.com/SpicyMarinara/Marinara-Engine/releases/download/v1.4.3/Marinara-Engine-Installer-1.4.3.exe)** from the [Releases](https://github.com/SpicyMarinara/Marinara-Engine/releases) page and run it. The installer checks for Node.js and Git, clones the repo, installs dependencies, builds the app, and creates a desktop shortcut.
 
 ---
 

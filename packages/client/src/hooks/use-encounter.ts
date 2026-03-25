@@ -104,6 +104,13 @@ export function useEncounter() {
 
         const r = res.result;
 
+        // Validate critical fields — AI may return malformed data
+        if (!r || typeof r !== "object") {
+          store.setError("AI returned an invalid response. Try again.");
+          store.setProcessing(false);
+          return;
+        }
+
         // Build sequential log entries
         const logs: Array<{ message: string; type: string }> = [];
         if (r.enemyActions) {

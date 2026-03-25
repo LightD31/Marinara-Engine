@@ -1258,7 +1258,7 @@ function SpritesTab({ characterId }: { characterId: string }) {
               </div>
               <div className="flex items-center justify-between p-2">
                 <span className="text-[0.6875rem] font-medium capitalize">{sprite.expression}</span>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity">
                   <button
                     onClick={() => startUpload(sprite.expression)}
                     className="rounded-lg p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"

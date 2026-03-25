@@ -35,6 +35,7 @@ function parseEntryRow(row: Record<string, unknown>) {
     matchWholeWords: row.matchWholeWords === "true",
     caseSensitive: row.caseSensitive === "true",
     useRegex: row.useRegex === "true",
+    locked: row.locked === "true",
     preventRecursion: row.preventRecursion === "true",
     keys: JSON.parse((row.keys as string) || "[]"),
     secondaryKeys: JSON.parse((row.secondaryKeys as string) || "[]"),
@@ -229,6 +230,7 @@ export function createLorebooksStorage(db: DB) {
         dynamicState: JSON.stringify(input.dynamicState ?? {}),
         activationConditions: JSON.stringify(input.activationConditions ?? []),
         schedule: input.schedule ? JSON.stringify(input.schedule) : null,
+        locked: String(input.locked ?? false),
         preventRecursion: String(input.preventRecursion ?? false),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -266,6 +268,7 @@ export function createLorebooksStorage(db: DB) {
       if (input.activationConditions !== undefined)
         updates.activationConditions = JSON.stringify(input.activationConditions);
       if (input.schedule !== undefined) updates.schedule = input.schedule ? JSON.stringify(input.schedule) : null;
+      if (input.locked !== undefined) updates.locked = String(input.locked);
       if (input.preventRecursion !== undefined) updates.preventRecursion = String(input.preventRecursion);
 
       await db.update(lorebookEntries).set(updates).where(eq(lorebookEntries.id, id));

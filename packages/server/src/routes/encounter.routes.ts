@@ -485,6 +485,11 @@ export async function encounterRoutes(app: FastifyInstance) {
         return reply.status(502).send({ error: "Invalid action result returned by AI" });
       }
 
+      // Validate that party/enemies are actual arrays — AI may return null, a string, or omit them
+      const cs = actionResult.combatStats as Record<string, unknown>;
+      if (!Array.isArray(cs.party)) cs.party = combatStats.party;
+      if (!Array.isArray(cs.enemies)) cs.enemies = combatStats.enemies;
+
       return { result: actionResult };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -527,7 +532,7 @@ export async function encounterRoutes(app: FastifyInstance) {
       const result = await provider.chatComplete(prompt, {
         model: conn.model,
         temperature: 0.9,
-        maxTokens: 4096,
+        maxTokens: 8192,
       });
 
       if (!result.content) {

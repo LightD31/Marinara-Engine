@@ -68,6 +68,7 @@ import { ConversationView } from "./ConversationView";
 import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { APP_VERSION } from "@marinara-engine/shared";
 import { BUILT_IN_AGENTS } from "@marinara-engine/shared";
+import { useTranslationStore } from "../../hooks/use-translate";
 
 /** Map characterId → { name, avatarUrl, colors, avatarCrop } */
 export type CharacterMap = Map<
@@ -140,14 +141,14 @@ function CrossfadeBackground({ url, className }: { url: string | null; className
     <>
       <div
         className={cn(
-          "absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-in-out",
+          "mari-background absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-in-out",
           className,
         )}
         style={{ backgroundImage: bgA ? `url(${bgA})` : "none", opacity: aActive ? 1 : 0 }}
       />
       <div
         className={cn(
-          "absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-in-out",
+          "mari-background absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-700 ease-in-out",
           className,
         )}
         style={{ backgroundImage: bgB ? `url(${bgB})` : "none", opacity: aActive ? 0 : 1 }}
@@ -324,6 +325,26 @@ export function ChatArea() {
   const streamingCharacterId = useChatStore((s) => s.streamingCharacterId);
   const updateMeta = useUpdateChatMetadata();
 
+  // Sync translation config from chat metadata to the translation store
+  useEffect(() => {
+    useTranslationStore.getState().setConfig({
+      provider: chatMeta.translationProvider ?? "google",
+      targetLanguage: chatMeta.translationTargetLang ?? "en",
+      connectionId: chatMeta.translationConnectionId,
+      deeplApiKey: chatMeta.translationDeeplApiKey,
+      deeplxUrl: chatMeta.translationDeeplxUrl,
+    });
+    // Clear cached translations on chat switch
+    useTranslationStore.getState().clearAll();
+  }, [
+    chat?.id,
+    chatMeta.translationProvider,
+    chatMeta.translationTargetLang,
+    chatMeta.translationConnectionId,
+    chatMeta.translationDeeplApiKey,
+    chatMeta.translationDeeplxUrl,
+  ]);
+
   // Restore per-chat background from metadata when switching chats.
   // If the new chat has a saved background, apply it; otherwise clear it.
   useEffect(() => {
@@ -414,6 +435,8 @@ export function ChatArea() {
   const handleRegenerate = useCallback(
     async (messageId: string) => {
       if (!activeChatId || isStreaming) return;
+      // On touch devices, confirm to prevent accidental taps
+      if (matchMedia("(pointer: coarse)").matches && !confirm("Regenerate this message?")) return;
       try {
         // Regenerate as a new swipe on the existing message
         await generate({ chatId: activeChatId, connectionId: null, regenerateMessageId: messageId });
@@ -602,6 +625,7 @@ export function ChatArea() {
   }, [isStreaming]);
 
   const newestMsgId = msgData?.pages[0]?.[msgData.pages[0].length - 1]?.id;
+  const newestMsgSwipeIndex = msgData?.pages[0]?.[msgData.pages[0].length - 1]?.activeSwipeIndex;
   const isOptimistic = newestMsgId?.startsWith("__optimistic_");
   useEffect(() => {
     if (isLoadingMoreRef.current) return;
@@ -609,7 +633,7 @@ export function ChatArea() {
     if (isOptimistic || (isNearBottomRef.current && !userScrolledAwayRef.current)) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [newestMsgId, streamBuffer, isStreaming, isOptimistic]);
+  }, [newestMsgId, newestMsgSwipeIndex, streamBuffer, isStreaming, isOptimistic]);
 
   // Preserve scroll position when older messages are prepended
   const pageCount = msgData?.pages.length ?? 0;
@@ -862,7 +886,7 @@ export function ChatArea() {
         />
       )}
 
-      <div className="relative flex flex-1 flex-col overflow-hidden rpg-chat-area">
+      <div className="relative flex flex-1 flex-col overflow-hidden mari-chat-area rpg-chat-area">
         {/* ── Background layers ── */}
         <CrossfadeBackground url={chatBackground} />
         <div className="absolute inset-0 rpg-overlay" />
@@ -1042,7 +1066,7 @@ export function ChatArea() {
             <div className={cn("relative flex-1 overflow-hidden z-10")}>
               <div
                 ref={scrollRef}
-                className="h-full overflow-y-auto overflow-x-hidden pt-4 pb-1 rpg-chat-messages-mobile relative px-[15%] max-md:px-3"
+                className="mari-messages-scroll h-full overflow-y-auto overflow-x-hidden pt-4 pb-1 rpg-chat-messages-mobile relative px-[15%] max-md:px-3"
               >
                 {/* Load More */}
                 {hasNextPage && (
@@ -1101,6 +1125,7 @@ export function ChatArea() {
                           characterMap={characterMap}
                           personaInfo={personaInfo}
                           chatMode={chatMode}
+                          messageDepth={messages ? messages.length - 1 - i : undefined}
                           isGrouped={isGrouped(i)}
                           groupChatMode={groupChatMode}
                           chatCharacterIds={chatCharIds}

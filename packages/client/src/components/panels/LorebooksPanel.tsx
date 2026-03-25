@@ -200,7 +200,9 @@ export function LorebooksPanel() {
                         key={lb.id}
                         lorebook={lb}
                         onClick={() => openLorebookDetail(lb.id)}
-                        onDelete={() => deleteLorebook.mutate(lb.id)}
+                        onDelete={() => {
+                          if (confirm(`Delete "${lb.name}"? All entries will be lost.`)) deleteLorebook.mutate(lb.id);
+                        }}
                       />
                     ))}
                   </div>
@@ -212,7 +214,9 @@ export function LorebooksPanel() {
                   key={lb.id}
                   lorebook={lb}
                   onClick={() => openLorebookDetail(lb.id)}
-                  onDelete={() => deleteLorebook.mutate(lb.id)}
+                  onDelete={() => {
+                    if (confirm(`Delete "${lb.name}"? All entries will be lost.`)) deleteLorebook.mutate(lb.id);
+                  }}
                 />
               ))}
         </div>

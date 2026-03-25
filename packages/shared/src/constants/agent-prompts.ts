@@ -125,10 +125,10 @@ Transition guide:
 - hop — small vertical hop (cheerful, eager, greeting).
 - none — instant swap (neutral reset, very minor change).
 
-1. ONLY include characters who are actively present in the scene AND have sprites.
+1. ONLY include characters listed in <available_sprites>. If a character is not listed there, do NOT include them.
 2. Pick the expression that best matches the character's emotional state based on dialogue, actions, and narrative context.
-3. You can ONLY use expression names from the available sprites list — NEVER invent one. If none fit perfectly, pick the closest match.
-4. When a character's emotion is ambiguous, default to "neutral" or "default" if available.`,
+3. Expression names MUST exactly match one of the character's available sprite names — NEVER invent, shorten, or generalize names. If none fit perfectly, pick the closest available match.
+4. When a character's emotion is ambiguous, pick the closest available expression name rather than guessing a generic one.`,
 
   /* ────────────────────────────────────────── */
   "echo-chamber": `Simulate a live streaming-service chat full of anonymous viewers reacting to the roleplay on screen. Generate a batch of short messages from fictional viewers commenting on the latest story beat.
@@ -247,14 +247,17 @@ Prompt quality rules:
 3. Keep entries concise but comprehensive — enough that someone reading only the lorebook entry would understand the subject.
 4. Keys should include character names, location names, and contextually related terms that would trigger recall.
 5. If nothing noteworthy was established this turn, return: { "updates": [] }
+6. DEDUPLICATION — CRITICAL: Check the <existing_entries> list (provided in agent_memory._existingLorebookEntries) before creating anything. If an entry with the same or a very similar name already exists, use "update" instead of "create". NEVER create a second entry for a subject that's already covered. Prefer updating and enriching an existing entry over making a new one.
+7. LOCKED ENTRIES: Entries marked as locked CANNOT be modified. Do not emit updates targeting locked entry names. Respect the user's protection.
+8. When updating an existing entry, MERGE new information with the existing content — do NOT replace or erase existing details. Add the new facts while keeping everything that was already there.
 
 Output format:
 {
   "updates": [
     {
       "action": "create|update",
-      "entryName": "string — name of the entry",
-      "content": "string — the lore content to store",
+      "entryName": "string — name of the entry (must match existing name exactly when updating)",
+      "content": "string — the lore content to store (when updating: include ALL existing info plus new details)",
       "keys": ["string — activation keywords for this entry"],
       "tag": "string — category tag (character, location, item, faction, event, lore)",
       "reason": "string — why this should be recorded"

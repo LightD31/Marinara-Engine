@@ -2,6 +2,7 @@
 // SceneBanner — inline message-style indicators for active scenes
 // ──────────────────────────────────────────────
 import { Film, ArrowRight, ArrowLeft, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { useChatStore } from "../../stores/chat.store";
 
 interface SceneBannerProps {
@@ -109,6 +110,7 @@ export function EndSceneBar({
   onAbandon?: (id: string) => void;
 }) {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   return (
     <div className="flex items-center justify-center gap-2 py-1.5">
@@ -140,9 +142,9 @@ export function EndSceneBar({
         <Film size={14} />
         End Scene
       </button>
-      {onAbandon && (
+      {onAbandon && !confirmDiscard && (
         <button
-          onClick={() => onAbandon(sceneChatId)}
+          onClick={() => setConfirmDiscard(true)}
           className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium transition-all hover:opacity-80"
           style={{
             color: "var(--muted-foreground)",
@@ -152,6 +154,29 @@ export function EndSceneBar({
           <Trash2 size={13} />
           Discard
         </button>
+      )}
+      {onAbandon && confirmDiscard && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[0.6875rem] text-[var(--destructive)]">Discard scene?</span>
+          <button
+            onClick={() => onAbandon(sceneChatId)}
+            className="rounded-lg px-2 py-0.5 text-[0.6875rem] font-medium transition-all hover:opacity-80"
+            style={{ background: "var(--destructive)", color: "var(--destructive-foreground)" }}
+          >
+            Yes
+          </button>
+          <button
+            onClick={() => setConfirmDiscard(false)}
+            className="rounded-lg px-2 py-0.5 text-[0.6875rem] font-medium transition-all hover:opacity-80"
+            style={{
+              background: "var(--card)",
+              color: "var(--card-foreground)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            No
+          </button>
+        </div>
       )}
     </div>
   );

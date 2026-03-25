@@ -59,6 +59,8 @@ export const lorebookEntries = sqliteTable("lorebook_entries", {
   groupWeight: integer("group_weight"),
 
   // Engine extensions
+  /** When true, the Lorebook Keeper agent cannot modify or overwrite this entry */
+  locked: text("locked").notNull().default("false"),
   tag: text("tag").notNull().default(""),
   /** JSON object { entryId: relationshipType } */
   relationships: text("relationships").notNull().default("{}"),

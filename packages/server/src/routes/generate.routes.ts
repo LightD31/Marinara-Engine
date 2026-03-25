@@ -27,6 +27,7 @@ import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
 import { createCustomToolsStorage } from "../services/storage/custom-tools.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
+import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
 import { processLorebooks } from "../services/lorebook/index.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { assemblePrompt, type AssemblerInput } from "../services/prompt/index.js";
@@ -150,6 +151,7 @@ export async function generateRoutes(app: FastifyInstance) {
   const gameStateStore = createGameStateStorage(app.db);
   const customToolsStore = createCustomToolsStorage(app.db);
   const lorebooksStore = createLorebooksStorage(app.db);
+  const regexScriptsStore = createRegexScriptsStorage(app.db);
 
   /**
    * POST /api/generate
@@ -307,6 +309,54 @@ export async function generateRoutes(app: FastifyInstance) {
               break;
             }
           }
+        }
+      }
+
+      // ── Apply prompt-only regex scripts to message content ──
+      const allRegexScripts = await regexScriptsStore.list();
+      const promptOnlyScripts = allRegexScripts.filter((s: any) => {
+        if (s.enabled !== "true" || s.promptOnly !== "true") return false;
+        return true;
+      });
+      if (promptOnlyScripts.length > 0) {
+        const totalMessages = mappedMessages.length;
+        for (let msgIdx = 0; msgIdx < totalMessages; msgIdx++) {
+          const msg = mappedMessages[msgIdx]!;
+          const messageDepth = totalMessages - 1 - msgIdx;
+          const placement = msg.role === "user" ? "user_input" : "ai_output";
+          let text = msg.content;
+          for (const script of promptOnlyScripts) {
+            const placements: string[] = (() => {
+              try {
+                return JSON.parse(script.placement as string);
+              } catch {
+                return [];
+              }
+            })();
+            if (!placements.includes(placement)) continue;
+            // Depth range filtering
+            const sMinDepth = script.minDepth as number | null;
+            const sMaxDepth = script.maxDepth as number | null;
+            if (sMinDepth != null && messageDepth < sMinDepth) continue;
+            if (sMaxDepth != null && messageDepth > sMaxDepth) continue;
+            try {
+              const re = new RegExp(script.findRegex as string, script.flags as string);
+              text = text.replace(re, script.replaceString as string);
+              const trims: string[] = (() => {
+                try {
+                  return JSON.parse(script.trimStrings as string);
+                } catch {
+                  return [];
+                }
+              })();
+              for (const t of trims) {
+                if (t) text = text.split(t).join("");
+              }
+            } catch {
+              /* invalid regex — skip */
+            }
+          }
+          msg.content = text;
         }
       }
 
@@ -1533,26 +1583,24 @@ export async function generateRoutes(app: FastifyInstance) {
       const groupSpeakerColors = chatMeta.groupSpeakerColors === true || (chatMode === "conversation" && isGroupChat);
       const groupResponseOrder = (chatMeta.groupResponseOrder as string) ?? "sequential";
 
-      if (isGroupChat) {
-        // Convert <speaker="Name">text</speaker> tags to Name: text format in history.
-        // Old messages may have speaker tags; convert them so the model sees a consistent
-        // "Name: text" format that's preserved naturally in future messages.
-        // Skip system messages to preserve example tags in the system prompt.
+      if (isGroupChat && chatMode !== "conversation") {
+        // Strip <speaker> tags from history to save tokens in roleplay mode.
+        // Just remove the tags, keep the dialogue content as-is.
         const speakerCloseRegex = /<\/speaker>/g;
         for (let i = 0; i < finalMessages.length; i++) {
           const msg = finalMessages[i]!;
           if (msg.role === "system") continue;
           if (msg.content.includes("<speaker=")) {
-            // Convert <speaker="Name">text</speaker> → Name: text
             let converted = msg.content;
-            converted = converted.replace(/<speaker="([^"]*)">/g, "$1: ");
+            converted = converted.replace(/<speaker="[^"]*">/g, "");
             converted = converted.replace(speakerCloseRegex, "");
-            // Clean up extra whitespace from the conversion
             converted = converted.replace(/^\s*\n/gm, "").trim();
             finalMessages[i] = { ...msg, content: converted };
           }
         }
+      }
 
+      if (isGroupChat) {
         // Inject group chat instructions at the end of the last user message
         const groupInstructions: string[] = [];
 
@@ -1623,12 +1671,27 @@ export async function generateRoutes(app: FastifyInstance) {
                 name: personaName,
                 description: personaDescription,
                 ...(persona?.personaStats
-                  ? {
-                      personaStats:
+                  ? (() => {
+                      const pStats =
                         typeof persona.personaStats === "string"
                           ? JSON.parse(persona.personaStats)
-                          : persona.personaStats,
-                    }
+                          : persona.personaStats;
+                      // Merge current values from gameState so the agent sees
+                      // live stats instead of the persona's default config.
+                      if (pStats?.bars && gameState?.personaStats && Array.isArray(gameState.personaStats)) {
+                        const currentByName = new Map(
+                          (gameState.personaStats as Array<{ name: string; value: number }>).map((s) => [
+                            s.name,
+                            s.value,
+                          ]),
+                        );
+                        pStats.bars = pStats.bars.map((bar: any) => ({
+                          ...bar,
+                          value: currentByName.has(bar.name) ? currentByName.get(bar.name) : bar.value,
+                        }));
+                      }
+                      return { personaStats: pStats };
+                    })()
                   : {}),
               }
             : null,
@@ -1645,6 +1708,41 @@ export async function generateRoutes(app: FastifyInstance) {
           .filter((b: any) => b.enabled === true || b.enabled === "true")
           .map((b: any) => b.id);
         agentContext.writableLorebookIds = enabledIds;
+
+        // ── Interval gating: only run every N assistant messages ──
+        const lkAgent = resolvedAgents.find((a) => a.type === "lorebook-keeper")!;
+        const runInterval = (lkAgent.settings.runInterval as number) ?? 8;
+        if (runInterval > 1) {
+          const lastRun = await agentsStore.getLastSuccessfulRunByType("lorebook-keeper", input.chatId);
+          if (lastRun) {
+            const lastRunMsgId = lastRun.messageId;
+            const lastRunIdx = allChatMessages.findIndex((m: any) => m.id === lastRunMsgId);
+            const messagesAfter =
+              lastRunIdx >= 0 ? allChatMessages.slice(lastRunIdx + 1).filter((m: any) => m.role === "assistant") : [];
+            if (messagesAfter.length + 1 < runInterval) {
+              // Not enough messages since last run — remove from pipeline
+              resolvedAgents.splice(resolvedAgents.indexOf(lkAgent), 1);
+            }
+          }
+          // First run ever: allow it to proceed
+        }
+
+        // ── Feed existing entry names to the agent for deduplication ──
+        if (resolvedAgents.some((a) => a.type === "lorebook-keeper") && enabledIds.length > 0) {
+          try {
+            const existingEntries = await lorebooksStore.listEntriesByLorebooks(enabledIds);
+            const entryNames = existingEntries.map((e: any) => ({
+              name: e.name,
+              keys: e.keys,
+              locked: e.locked === true || e.locked === "true",
+            }));
+            if (entryNames.length > 0) {
+              agentContext.memory._existingLorebookEntries = entryNames;
+            }
+          } catch {
+            /* non-critical */
+          }
+        }
       }
 
       // If the expression agent is enabled, load available sprite expressions per character
@@ -2615,21 +2713,6 @@ export async function generateRoutes(app: FastifyInstance) {
           }
         }
 
-        // ── Smart quotes: convert straight quotes to typographic curly quotes ──
-        // Skip if the response contains code fences — don't corrupt code/JSON
-        const hasCodeFence = /```/.test(fullResponse);
-        if (!hasCodeFence) {
-          // Double quotes: "text" → \u201Ctext\u201D
-          // Single quotes: 'text' → \u2018text\u2019, then remaining ' (apostrophes) → \u2019
-          let smartQuoted = fullResponse.replace(/"([^"]*?)"/g, "\u201C$1\u201D");
-          smartQuoted = smartQuoted.replace(/(^|[\s(])'([^']*?)'(?=[\s),.!?;:\u2014\u2013-]|$)/gm, "$1\u2018$2\u2019");
-          smartQuoted = smartQuoted.replace(/'/g, "\u2019");
-          if (smartQuoted !== fullResponse) {
-            fullResponse = smartQuoted;
-            contentReplaced = true;
-          }
-        }
-
         if (contentReplaced) {
           reply.raw.write(`data: ${JSON.stringify({ type: "content_replace", data: fullResponse })}\n\n`);
         }
@@ -2929,6 +3012,43 @@ export async function generateRoutes(app: FastifyInstance) {
               } catch {
                 /* non-critical */
               }
+            }
+          }
+
+          // Validate expression agent results — reject hallucinated expressions and unknown characters
+          if (result.success && result.type === "sprite_change" && result.data && typeof result.data === "object") {
+            const spriteData = result.data as { expressions?: Array<{ characterId: string; expression: string }> };
+            const availableSprites = agentContext.memory._availableSprites as
+              | Array<{ characterId: string; characterName: string; expressions: string[] }>
+              | undefined;
+            if (spriteData.expressions && availableSprites) {
+              spriteData.expressions = spriteData.expressions.filter((entry) => {
+                const charSprites = availableSprites.find((s) => s.characterId === entry.characterId);
+                if (!charSprites) {
+                  console.warn(
+                    `[generate] Expression agent returned unknown character "${entry.characterId}" — removing`,
+                  );
+                  return false;
+                }
+                if (!charSprites.expressions.includes(entry.expression)) {
+                  // Try a substring/contains match as fallback
+                  const fallback = charSprites.expressions.find(
+                    (e) => e.includes(entry.expression) || entry.expression.includes(e),
+                  );
+                  if (fallback) {
+                    console.warn(
+                      `[generate] Expression agent chose "${entry.expression}" — correcting to closest match "${fallback}"`,
+                    );
+                    entry.expression = fallback;
+                  } else {
+                    console.warn(
+                      `[generate] Expression agent chose "${entry.expression}" for ${charSprites.characterName} which doesn't exist — removing`,
+                    );
+                    return false;
+                  }
+                }
+                return true;
+              });
             }
           }
 
@@ -3244,10 +3364,17 @@ export async function generateRoutes(app: FastifyInstance) {
 
                     const existing = entryByName.get(name.toLowerCase());
 
-                    if (action === "update" && existing) {
+                    // Skip locked entries — user has protected them from agent edits
+                    if (existing && (existing.locked === true || existing.locked === "true")) {
+                      continue;
+                    }
+
+                    // Skip duplicate creates — if an entry with this name already exists, update instead
+                    if (action === "create" && existing) {
+                      await lorebooksStore.updateEntry(existing.id, { content, keys, tag });
+                    } else if (action === "update" && existing) {
                       await lorebooksStore.updateEntry(existing.id, { content, keys, tag });
                     } else {
-                      // Create new entry (or create if "update" target not found)
                       await lorebooksStore.createEntry({
                         lorebookId: targetLorebookId,
                         name,
@@ -4294,7 +4421,16 @@ export async function generateRoutes(app: FastifyInstance) {
                   const tag = (u.tag as string) ?? "";
                   const action = (u.action as string) ?? "create";
                   const existing = entryByName.get(name.toLowerCase());
-                  if (action === "update" && existing) {
+
+                  // Skip locked entries
+                  if (existing && (existing.locked === true || existing.locked === "true")) {
+                    continue;
+                  }
+
+                  // Skip duplicate creates — update instead if name already exists
+                  if (action === "create" && existing) {
+                    await lorebooksStore.updateEntry(existing.id, { content, keys, tag });
+                  } else if (action === "update" && existing) {
                     await lorebooksStore.updateEntry(existing.id, { content, keys, tag });
                   } else {
                     await lorebooksStore.createEntry({

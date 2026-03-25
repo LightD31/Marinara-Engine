@@ -388,6 +388,11 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "comment",
     definition: "TEXT NOT NULL DEFAULT ''",
   },
+  {
+    table: "lorebook_entries",
+    column: "locked",
+    definition: "TEXT NOT NULL DEFAULT 'false'",
+  },
 ];
 
 export async function runMigrations(db: DB) {

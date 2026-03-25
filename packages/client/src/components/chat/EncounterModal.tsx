@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Combat Encounter Modal — Full turn-based combat UI
 // ──────────────────────────────────────────────
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Component, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Swords,
@@ -445,6 +445,15 @@ function PlayerControls({ onAction }: { onAction: (text: string) => void }) {
     attackType: string;
   } | null>(null);
 
+  if (!Array.isArray(party) || party.length === 0) {
+    return (
+      <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
+        <AlertTriangle size="1.5rem" className="mx-auto mb-2 text-yellow-400" />
+        <p className="text-xs text-yellow-300">Waiting for combat data...</p>
+      </div>
+    );
+  }
+
   const player = party.find((m) => m.isPlayer);
   if (!player || player.hp <= 0) {
     return (
@@ -639,7 +648,7 @@ function CombatEndScreen() {
 // Main Modal
 // ──────────────────────────────────────────────
 
-export function EncounterModal() {
+function EncounterModalInner() {
   const active = useEncounterStore((s) => s.active);
   const showConfigModal = useEncounterStore((s) => s.showConfigModal);
   const initialized = useEncounterStore((s) => s.initialized);
@@ -796,9 +805,8 @@ export function EncounterModal() {
                       Enemies
                     </h3>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {enemies.map((enemy, i) => (
-                        <EnemyCard key={i} enemy={enemy} index={i} isDead={enemy.hp <= 0} />
-                      ))}
+                      {Array.isArray(enemies) &&
+                        enemies.map((enemy, i) => <EnemyCard key={i} enemy={enemy} index={i} isDead={enemy.hp <= 0} />)}
                     </div>
                   </div>
 
@@ -809,9 +817,7 @@ export function EncounterModal() {
                       Party
                     </h3>
                     <div className="space-y-2">
-                      {party.map((member, i) => (
-                        <PartyCard key={i} member={member} />
-                      ))}
+                      {Array.isArray(party) && party.map((member, i) => <PartyCard key={i} member={member} />)}
                     </div>
                   </div>
 
@@ -848,5 +854,50 @@ export function EncounterModal() {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+// ── Error boundary to prevent combat crashes from black-screening the app ──
+class EncounterErrorBoundary extends Component<{ children: ReactNode; onReset: () => void }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div className="relative flex max-w-md flex-col items-center gap-4 rounded-2xl border border-red-500/20 bg-gray-950 p-8 shadow-2xl">
+            <AlertTriangle size="2.5rem" className="text-red-400" />
+            <h3 className="text-sm font-bold text-white/90">Combat Error</h3>
+            <p className="text-center text-xs text-white/50">
+              Something went wrong during combat. This is usually caused by the AI returning unexpected data.
+            </p>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false });
+                this.props.onReset();
+              }}
+              className="rounded-xl bg-red-600 px-6 py-2.5 text-xs font-medium text-white transition-all hover:bg-red-500"
+            >
+              Close Encounter
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function EncounterModal() {
+  const { closeEncounter } = useEncounter();
+  return (
+    <EncounterErrorBoundary onReset={closeEncounter}>
+      <EncounterModalInner />
+    </EncounterErrorBoundary>
   );
 }

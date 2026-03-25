@@ -86,6 +86,8 @@ export interface LorebookEntry {
   groupWeight: number | null;
 
   // ── Engine extensions (beyond ST) ──
+  /** When true, the Lorebook Keeper agent cannot modify or overwrite this entry */
+  locked: boolean;
   /** When true, this entry's content won't trigger further entries during recursive scanning */
   preventRecursion: boolean;
   /** Sub-category tag for the entry (e.g. "location", "item", "lore", "quest") */

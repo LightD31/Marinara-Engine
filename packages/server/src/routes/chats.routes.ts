@@ -273,81 +273,10 @@ export async function chatsRoutes(app: FastifyInstance) {
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
 
     const chatMessages = await storage.listMessages(req.params.id);
-
-    // Find the latest assistant message and return its cached prompt.
-    // This is the exact messages array that was sent to the model,
-    // including pre-gen agent injections (Prose Guardian, Director) but
-    // NOT post-processing agent results (game state, etc.).
-    for (let i = chatMessages.length - 1; i >= 0; i--) {
-      const m = chatMessages[i]! as any;
-      if (m.role === "assistant") {
-        let extra = typeof m.extra === "string" ? JSON.parse(m.extra) : (m.extra ?? {});
-        let cachedPrompt = extra.cachedPrompt as Array<{ role: string; content: string }> | undefined;
-        let generationInfo = extra.generationInfo as Record<string, unknown> | undefined;
-
-        // If message-level extra doesn't have it (swipe overwrite), check swipes
-        if (!cachedPrompt && m.id) {
-          const swipes = await storage.getSwipes(m.id);
-          // Check the active swipe first, then fall back to any swipe that has it
-          const activeSwipe = swipes.find((s: any) => s.index === m.activeSwipeIndex);
-          if (activeSwipe) {
-            const swExtra =
-              typeof activeSwipe.extra === "string" ? JSON.parse(activeSwipe.extra) : (activeSwipe.extra ?? {});
-            cachedPrompt = swExtra.cachedPrompt;
-            if (swExtra.generationInfo) generationInfo = swExtra.generationInfo;
-          }
-          if (!cachedPrompt) {
-            for (const sw of swipes) {
-              const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
-              if (swExtra.cachedPrompt) {
-                cachedPrompt = swExtra.cachedPrompt;
-                if (swExtra.generationInfo) generationInfo = swExtra.generationInfo;
-                break;
-              }
-            }
-          }
-        }
-
-        if (cachedPrompt) {
-          return { messages: cachedPrompt, parameters: null, generationInfo: generationInfo ?? null, cached: true };
-        }
-        break;
-      }
-    }
-
-    // ── Fallback: live assembly for messages generated before caching was added ──
     const chatMeta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
 
-    // Apply conversation-start filter
-    let filteredMessages = chatMessages;
-    for (let i = chatMessages.length - 1; i >= 0; i--) {
-      const extra =
-        typeof chatMessages[i]!.extra === "string"
-          ? JSON.parse(chatMessages[i]!.extra as string)
-          : (chatMessages[i]!.extra ?? {});
-      if (extra.isConversationStart) {
-        filteredMessages = chatMessages.slice(i);
-        break;
-      }
-    }
-
-    // Apply context message limit
-    const contextLimit = chatMeta.contextMessageLimit as number | null;
-    if (contextLimit && contextLimit > 0 && filteredMessages.length > contextLimit) {
-      filteredMessages = filteredMessages.slice(-contextLimit);
-    }
-
-    const mappedMessages = filteredMessages.map((m: any) => ({
-      role: m.role === "narrator" ? "system" : m.role,
-      content: m.content as string,
-    }));
-
-    // Strip trailing assistant messages — peek should show only what we SEND to the model
-    while (mappedMessages.length > 0 && mappedMessages[mappedMessages.length - 1]!.role === "assistant") {
-      mappedMessages.pop();
-    }
-
-    // If chat has a preset, run the full assembler
+    // ── Live assembly: always try assembling from the current preset first ──
+    // This ensures any edits to the preset are reflected immediately.
     const presetId = chat.promptPresetId ?? chatMeta.presetId;
     if (presetId) {
       try {
@@ -359,6 +288,35 @@ export async function chatsRoutes(app: FastifyInstance) {
 
         const preset = await presetStore.getById(presetId);
         if (preset) {
+          // Apply conversation-start filter
+          let filteredMessages = chatMessages;
+          for (let i = chatMessages.length - 1; i >= 0; i--) {
+            const extra =
+              typeof chatMessages[i]!.extra === "string"
+                ? JSON.parse(chatMessages[i]!.extra as string)
+                : (chatMessages[i]!.extra ?? {});
+            if (extra.isConversationStart) {
+              filteredMessages = chatMessages.slice(i);
+              break;
+            }
+          }
+
+          // Apply context message limit
+          const contextLimit = chatMeta.contextMessageLimit as number | null;
+          if (contextLimit && contextLimit > 0 && filteredMessages.length > contextLimit) {
+            filteredMessages = filteredMessages.slice(-contextLimit);
+          }
+
+          const mappedMessages = filteredMessages.map((m: any) => ({
+            role: m.role === "narrator" ? "system" : m.role,
+            content: m.content as string,
+          }));
+
+          // Strip trailing assistant messages — peek should show only what we SEND to the model
+          while (mappedMessages.length > 0 && mappedMessages[mappedMessages.length - 1]!.role === "assistant") {
+            mappedMessages.pop();
+          }
+
           const [sections, groups, choiceBlocks] = await Promise.all([
             presetStore.listSections(presetId),
             presetStore.listGroups(presetId),
@@ -423,15 +381,181 @@ export async function chatsRoutes(app: FastifyInstance) {
             personaDescription,
             personaFields,
             chatMessages: mappedMessages,
+            chatSummary: (chatMeta.summary as string) ?? null,
             enableAgents: chatMeta.enableAgents === true,
             activeAgentIds: Array.isArray(chatMeta.activeAgentIds) ? (chatMeta.activeAgentIds as string[]) : [],
+            activeLorebookIds: Array.isArray(chatMeta.activeLorebookIds)
+              ? (chatMeta.activeLorebookIds as string[])
+              : [],
           });
+
+          // ── Strip <speaker> tags from chat history to save tokens (roleplay only) ──
+          const isGroupChat = characterIds.length > 1;
+          const chatMode = (chat.mode as string) ?? "roleplay";
+          if (isGroupChat && chatMode !== "conversation") {
+            const speakerCloseRegex = /<\/speaker>/g;
+            for (let i = 0; i < assembled.messages.length; i++) {
+              const msg = assembled.messages[i]!;
+              if (msg.role === "system") continue;
+              if (msg.content.includes("<speaker=")) {
+                let converted = msg.content;
+                converted = converted.replace(/<speaker="[^"]*">/g, "");
+                converted = converted.replace(speakerCloseRegex, "");
+                converted = converted.replace(/^\s*\n/gm, "").trim();
+                assembled.messages[i] = { ...msg, content: converted };
+              }
+            }
+          }
+
+          // ── Inject group chat speaker tag instructions ──
+          const groupChatMode =
+            chatMode === "conversation" ? "merged" : ((chatMeta.groupChatMode as string) ?? "merged");
+          const groupSpeakerColors =
+            chatMeta.groupSpeakerColors === true || (chatMode === "conversation" && isGroupChat);
+
+          if (isGroupChat && groupChatMode === "merged" && groupSpeakerColors && chatMode !== "conversation") {
+            // Fetch character names for the example
+            const charNames: string[] = [];
+            for (const cid of characterIds) {
+              const charRow = await charStore.getById(cid);
+              if (charRow) {
+                const charData = JSON.parse(charRow.data as string);
+                charNames.push(charData.name ?? "Unknown");
+              }
+            }
+            const speakerInstruction = `- Since this is a group chat, wrap each character's dialogue in <speaker="name"> tags. Tags can appear inline with narration, they don't need to be on separate lines. Example: <speaker="${charNames[0] ?? "John"}">"Hello there,"</speaker> [action beat/dialogue tag].`;
+            const wrapFmt = (preset as any).wrapFormat || "xml";
+            const instructionBlock =
+              wrapFmt === "markdown" ? `\n## Group Chat\n${speakerInstruction}` : speakerInstruction;
+
+            // Inject into </output_format> if present, otherwise append to last user message
+            let speakerInjected = false;
+            for (let i = 0; i < assembled.messages.length; i++) {
+              const msg = assembled.messages[i]!;
+              if (msg.content.includes("</output_format>")) {
+                assembled.messages[i] = {
+                  ...msg,
+                  content: msg.content.replace("</output_format>", "    " + instructionBlock + "\n</output_format>"),
+                };
+                speakerInjected = true;
+                break;
+              }
+            }
+            if (!speakerInjected) {
+              let lastUserIdx = -1;
+              for (let i = assembled.messages.length - 1; i >= 0; i--) {
+                if (assembled.messages[i]!.role === "user") {
+                  lastUserIdx = i;
+                  break;
+                }
+              }
+              const idx = lastUserIdx >= 0 ? lastUserIdx : assembled.messages.length - 1;
+              const target = assembled.messages[idx]!;
+              assembled.messages[idx] = { ...target, content: target.content + "\n\n" + instructionBlock };
+            }
+          }
+
+          // ── Static injection: Immersive HTML agent ──
+          const peekAgentIds = Array.isArray(chatMeta.activeAgentIds) ? (chatMeta.activeAgentIds as string[]) : [];
+          if (
+            chatMeta.enableAgents === true &&
+            chatMode !== "conversation" &&
+            peekAgentIds.length > 0 &&
+            peekAgentIds.includes("html")
+          ) {
+            const { createAgentsStorage } = await import("../services/storage/agents.storage.js");
+            const agentsStore = createAgentsStorage(app.db);
+            const htmlCfg = await agentsStore.getByType("html");
+            // Per-chat activeAgentIds overrides the global enabled flag (matches generation flow)
+            const htmlPrompt = ((htmlCfg?.promptTemplate as string) || getDefaultAgentPrompt("html")).trim();
+            if (htmlPrompt) {
+              const wrapFmt = (preset as any).wrapFormat || "xml";
+              const htmlBlock = wrapFmt === "markdown" ? `\n## Immersive HTML\n${htmlPrompt}` : htmlPrompt;
+              let injected = false;
+              for (let i = 0; i < assembled.messages.length; i++) {
+                const msg = assembled.messages[i]!;
+                if (msg.content.includes("</output_format>")) {
+                  assembled.messages[i] = {
+                    ...msg,
+                    content: msg.content.replace("</output_format>", "    " + htmlBlock + "\n</output_format>"),
+                  };
+                  injected = true;
+                  break;
+                }
+              }
+              if (!injected) {
+                let lastUserIdx = -1;
+                for (let i = assembled.messages.length - 1; i >= 0; i--) {
+                  if (assembled.messages[i]!.role === "user") {
+                    lastUserIdx = i;
+                    break;
+                  }
+                }
+                const idx = lastUserIdx >= 0 ? lastUserIdx : assembled.messages.length - 1;
+                const target = assembled.messages[idx]!;
+                assembled.messages[idx] = {
+                  ...target,
+                  content:
+                    target.content +
+                    "\n\n" +
+                    (wrapFmt === "xml" ? `<immersive_html>\n${htmlPrompt}\n</immersive_html>` : htmlBlock),
+                };
+              }
+            }
+          }
 
           return { messages: assembled.messages, parameters: assembled.parameters, generationInfo: null };
         }
       } catch (e) {
-        console.error("[peek-prompt] Assembler failed, falling through to raw messages:", e);
+        console.error("[peek-prompt] Assembler failed, falling through to cached/raw messages:", e);
       }
+    }
+
+    // ── Fallback: return cached prompt from the last generation ──
+    // Used when no preset is assigned or assembly failed.
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const m = chatMessages[i]! as any;
+      if (m.role === "assistant") {
+        let extra = typeof m.extra === "string" ? JSON.parse(m.extra) : (m.extra ?? {});
+        let cachedPrompt = extra.cachedPrompt as Array<{ role: string; content: string }> | undefined;
+        let generationInfo = extra.generationInfo as Record<string, unknown> | undefined;
+
+        // If message-level extra doesn't have it (swipe overwrite), check swipes
+        if (!cachedPrompt && m.id) {
+          const swipes = await storage.getSwipes(m.id);
+          const activeSwipe = swipes.find((s: any) => s.index === m.activeSwipeIndex);
+          if (activeSwipe) {
+            const swExtra =
+              typeof activeSwipe.extra === "string" ? JSON.parse(activeSwipe.extra) : (activeSwipe.extra ?? {});
+            cachedPrompt = swExtra.cachedPrompt;
+            if (swExtra.generationInfo) generationInfo = swExtra.generationInfo;
+          }
+          if (!cachedPrompt) {
+            for (const sw of swipes) {
+              const swExtra = typeof sw.extra === "string" ? JSON.parse(sw.extra) : (sw.extra ?? {});
+              if (swExtra.cachedPrompt) {
+                cachedPrompt = swExtra.cachedPrompt;
+                if (swExtra.generationInfo) generationInfo = swExtra.generationInfo;
+                break;
+              }
+            }
+          }
+        }
+
+        if (cachedPrompt) {
+          return { messages: cachedPrompt, parameters: null, generationInfo: generationInfo ?? null, cached: true };
+        }
+        break;
+      }
+    }
+
+    // ── Last resort: return raw chat messages ──
+    const mappedMessages = chatMessages.map((m: any) => ({
+      role: m.role === "narrator" ? "system" : m.role,
+      content: m.content as string,
+    }));
+    while (mappedMessages.length > 0 && mappedMessages[mappedMessages.length - 1]!.role === "assistant") {
+      mappedMessages.pop();
     }
 
     return { messages: mappedMessages, parameters: null, generationInfo: null };

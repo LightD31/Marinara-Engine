@@ -65,7 +65,7 @@ export function ChatFilesDrawer({ chat, open, onClose }: ChatFilesDrawerProps) {
     return (
       <>
         <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-[2px]" onClick={onClose} />
-        <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up">
+        <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up max-md:pt-[env(safe-area-inset-top)]">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <h3 className="text-sm font-bold">Manage Chat Files</h3>
             <button
@@ -118,7 +118,7 @@ export function ChatFilesDrawer({ chat, open, onClose }: ChatFilesDrawerProps) {
       <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-[2px]" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up">
+      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up max-md:pt-[env(safe-area-inset-top)]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h3 className="text-sm font-bold">Manage Chat Files</h3>
@@ -213,7 +213,7 @@ export function ChatFilesDrawer({ chat, open, onClose }: ChatFilesDrawerProps) {
                         e.stopPropagation();
                         handleDelete(cf.id);
                       }}
-                      className="shrink-0 rounded-lg p-1.5 opacity-0 transition-all hover:bg-[var(--destructive)]/15 group-hover:opacity-100"
+                      className="shrink-0 rounded-lg p-1.5 opacity-0 transition-all hover:bg-[var(--destructive)]/15 group-hover:opacity-100 max-md:opacity-100"
                     >
                       <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
                     </button>

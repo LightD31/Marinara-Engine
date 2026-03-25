@@ -178,6 +178,11 @@ export async function sceneRoutes(app: FastifyInstance) {
       .slice(-3000);
 
     // Store scene metadata on the new chat (single write)
+    // Inherit lorebooks from origin chat
+    const originMeta =
+      typeof originChat.metadata === "string" ? JSON.parse(originChat.metadata) : (originChat.metadata ?? {});
+    const originLorebookIds = Array.isArray(originMeta.activeLorebookIds) ? originMeta.activeLorebookIds : [];
+
     const existingMeta =
       typeof sceneChat.metadata === "string" ? JSON.parse(sceneChat.metadata) : (sceneChat.metadata ?? {});
     await chats.updateMetadata(sceneChat.id, {
@@ -193,11 +198,8 @@ export async function sceneRoutes(app: FastifyInstance) {
       sceneConversationContext: historyText,
       sceneRelationshipHistory: plan.relationshipHistory || null,
       ...(plan.background ? { background: plan.background } : {}),
+      ...(originLorebookIds.length ? { activeLorebookIds: originLorebookIds } : {}),
     });
-
-    // Mark the origin conversation as having an active scene
-    const originMeta =
-      typeof originChat.metadata === "string" ? JSON.parse(originChat.metadata) : (originChat.metadata ?? {});
     await chats.updateMetadata(originChatId, {
       ...originMeta,
       activeSceneChatId: sceneChat.id,

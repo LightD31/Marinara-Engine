@@ -33,6 +33,7 @@ import {
   Brain,
   Globe,
   Maximize2,
+  Languages,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -359,7 +360,7 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
       <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-[2px]" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up">
+      <div className="absolute right-0 top-0 z-50 flex h-full w-80 max-md:w-full flex-col border-l border-[var(--border)] bg-[var(--background)] shadow-2xl animate-fade-in-up max-md:pt-[env(safe-area-inset-top)]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <h3 className="text-sm font-bold">Chat Settings</h3>
@@ -1862,6 +1863,110 @@ export function ChatSettingsDrawer({ chat, open, onClose }: ChatSettingsDrawerPr
             </Section>
           )}
 
+          {/* Translation */}
+          <Section
+            label="Translation"
+            icon={<Languages size="0.875rem" />}
+            help="Translate messages on the fly. Click the translate icon on any message to translate it. Configure the provider and target language here."
+          >
+            <div className="space-y-3">
+              {/* Provider */}
+              <div>
+                <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">Provider</label>
+                <select
+                  value={metadata.translationProvider ?? "google"}
+                  onChange={(e) => updateMeta.mutate({ id: chat.id, translationProvider: e.target.value })}
+                  className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                >
+                  <option value="google">Google Translate</option>
+                  <option value="deepl">DeepL API</option>
+                  <option value="deeplx">DeepLX (self-hosted)</option>
+                  <option value="ai">AI (via connection)</option>
+                </select>
+              </div>
+
+              {/* Target Language */}
+              <div>
+                <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+                  Target Language
+                  <HelpTooltip
+                    text={
+                      metadata.translationProvider === "ai"
+                        ? "Language name (e.g. English, Japanese, Spanish)"
+                        : "Language code (e.g. en, ja, es, de, fr, zh, ko)"
+                    }
+                    size="0.625rem"
+                  />
+                </label>
+                <input
+                  type="text"
+                  value={metadata.translationTargetLang ?? "en"}
+                  onChange={(e) => updateMeta.mutate({ id: chat.id, translationTargetLang: e.target.value })}
+                  placeholder={metadata.translationProvider === "ai" ? "English" : "en"}
+                  className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                />
+              </div>
+
+              {/* AI-specific: connection selector */}
+              {metadata.translationProvider === "ai" && (
+                <div>
+                  <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+                    Connection
+                    <HelpTooltip text="Which AI connection to use for translation" size="0.625rem" />
+                  </label>
+                  <select
+                    value={metadata.translationConnectionId ?? ""}
+                    onChange={(e) =>
+                      updateMeta.mutate({ id: chat.id, translationConnectionId: e.target.value || undefined })
+                    }
+                    className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  >
+                    <option value="">Select connection…</option>
+                    {((connections ?? []) as Array<{ id: string; name: string }>).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* DeepL API key */}
+              {metadata.translationProvider === "deepl" && (
+                <div>
+                  <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">DeepL API Key</label>
+                  <input
+                    type="password"
+                    value={metadata.translationDeeplApiKey ?? ""}
+                    onChange={(e) => updateMeta.mutate({ id: chat.id, translationDeeplApiKey: e.target.value })}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+                    className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  />
+                </div>
+              )}
+
+              {/* DeepLX URL */}
+              {metadata.translationProvider === "deeplx" && (
+                <div>
+                  <label className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+                    DeepLX URL
+                    <HelpTooltip
+                      text="URL of your self-hosted DeepLX instance (e.g. http://localhost:1188)"
+                      size="0.625rem"
+                    />
+                  </label>
+                  <input
+                    type="text"
+                    value={metadata.translationDeeplxUrl ?? ""}
+                    onChange={(e) => updateMeta.mutate({ id: chat.id, translationDeeplxUrl: e.target.value })}
+                    placeholder="http://localhost:1188"
+                    className="mt-0.5 w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                  />
+                </div>
+              )}
+            </div>
+          </Section>
+
           {/* Advanced Parameters */}
           <AdvancedParametersSection
             chat={chat}
@@ -2171,9 +2276,9 @@ function AdvancedParametersSection({
                 />
               </span>
               <div className="mt-1 flex gap-1.5">
-                {(["low", "medium", "high", "maximum", null] as const).map((level) => (
+                {([null, "low", "medium", "high", "maximum"] as const).map((level) => (
                   <button
-                    key={level ?? "off"}
+                    key={level ?? "none"}
                     onClick={() => set("reasoningEffort", level)}
                     className={cn(
                       "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
@@ -2182,7 +2287,7 @@ function AdvancedParametersSection({
                         : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
                     )}
                   >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "Off"}
+                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
                   </button>
                 ))}
               </div>
@@ -2196,9 +2301,9 @@ function AdvancedParametersSection({
                 />
               </span>
               <div className="mt-1 flex gap-1.5">
-                {(["low", "medium", "high", null] as const).map((level) => (
+                {([null, "low", "medium", "high"] as const).map((level) => (
                   <button
-                    key={level ?? "off"}
+                    key={level ?? "none"}
                     onClick={() => set("verbosity", level)}
                     className={cn(
                       "rounded-lg px-2 py-1 text-[0.625rem] font-medium transition-all",
@@ -2207,7 +2312,7 @@ function AdvancedParametersSection({
                         : "bg-[var(--secondary)] text-[var(--muted-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
                     )}
                   >
-                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "Off"}
+                    {level ? level.charAt(0).toUpperCase() + level.slice(1) : "None"}
                   </button>
                 ))}
               </div>

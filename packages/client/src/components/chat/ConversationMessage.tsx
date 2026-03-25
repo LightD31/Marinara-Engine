@@ -2,9 +2,10 @@
 // Chat: Discord-style conversation message
 // ──────────────────────────────────────────────
 import { useState, useCallback, useRef, memo, useMemo, type ReactNode } from "react";
-import { Pencil, Trash2, Copy, RefreshCw, Eye, Brain, X, User } from "lucide-react";
+import { Pencil, Trash2, Copy, RefreshCw, Eye, Brain, X, User, Languages } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { CharacterMap } from "./ChatArea";
+import { useTranslate } from "../../hooks/use-translate";
 
 /** Regex to detect a message that is just an image/GIF URL */
 const IMAGE_URL_RE = /^https?:\/\/\S+\.(?:gif|png|jpe?g|webp)(?:\?[^\s]*)?$/i;
@@ -35,6 +36,11 @@ function applyInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   return nodes.length > 0 ? nodes : [text];
 }
 
+/** Regex to match markdown headings at the start of a line. */
+const HEADING_RE = /^(#{1,6})\s+(.+)$/;
+/** Regex to match horizontal rules: *** / --- (3+ chars, standalone line). */
+const HR_LINE_RE = /^(?:\*{3,}|-{3,})$/;
+
 /** Renders message content, showing image URLs as inline images */
 function MessageContent({ content }: { content: string }) {
   if (IMAGE_URL_RE.test(content.trim())) {
@@ -45,7 +51,41 @@ function MessageContent({ content }: { content: string }) {
       </a>
     );
   }
-  return <>{applyInlineMarkdown(content, "m")}</>;
+
+  // Split lines and detect markdown headings + horizontal rules
+  const lines = content.split("\n");
+  const segments: ReactNode[] = [];
+  let buffer: string[] = [];
+  let key = 0;
+
+  const flushBuffer = () => {
+    if (buffer.length > 0) {
+      segments.push(<span key={`seg${key++}`}>{applyInlineMarkdown(buffer.join("\n"), "m")}</span>);
+      buffer = [];
+    }
+  };
+
+  for (const line of lines) {
+    const hMatch = HEADING_RE.exec(line);
+    if (hMatch) {
+      flushBuffer();
+      const level = hMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
+      const Tag = `h${level}` as const;
+      segments.push(
+        <Tag key={`h${key++}`} className="mari-md-heading">
+          {hMatch[2]}
+        </Tag>,
+      );
+    } else if (HR_LINE_RE.test(line.trim())) {
+      flushBuffer();
+      segments.push(<hr key={`hr${key++}`} className="my-3 border-t border-[var(--border)]" />);
+    } else {
+      buffer.push(line);
+    }
+  }
+  flushBuffer();
+
+  return <>{segments}</>;
 }
 
 /** Parse <speaker="Name">text</speaker> tags into segments */
@@ -204,6 +244,11 @@ export const ConversationMessage = memo(function ConversationMessage({
   const [showThinking, setShowThinking] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
 
+  // Translation
+  const { translate, translations, translating } = useTranslate();
+  const translatedText = translations[message.id];
+  const isTranslating = !!translating[message.id];
+
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -354,6 +399,12 @@ export const ConversationMessage = memo(function ConversationMessage({
           )}
         >
           <MsgAction icon={copied ? "✓" : <Copy size="0.75rem" />} onClick={handleCopy} title="Copy" />
+          <MsgAction
+            icon={<Languages size="0.75rem" />}
+            onClick={() => translate(message.id, message.content)}
+            title={translatedText ? "Hide translation" : "Translate"}
+            className={translatedText ? "text-blue-400" : undefined}
+          />
           <MsgAction icon={<Pencil size="0.75rem" />} onClick={onEditClick ?? startEditing} title="Edit" />
           <MsgAction
             icon={<RefreshCw size="0.75rem" />}
@@ -411,15 +462,18 @@ export const ConversationMessage = memo(function ConversationMessage({
   return (
     <div
       className={cn(
-        "relative flex gap-4 px-4 py-0.5 transition-colors hover:bg-[var(--secondary)]/30",
+        "mari-message relative flex gap-4 px-4 py-0.5 transition-colors hover:bg-[var(--secondary)]/30",
+        isUser ? "mari-message-user" : "mari-message-assistant",
         !noHoverGroup && "group",
         isGrouped ? "mt-0" : "mt-4",
         isStreaming && "bg-[var(--secondary)]/20",
       )}
+      data-message-id={message.id}
+      data-message-role={message.role}
       onClick={() => setShowActions((v) => !v)}
     >
       {/* Avatar column — fixed 40px width */}
-      <div className="w-10 flex-shrink-0">
+      <div className="mari-message-avatar w-10 flex-shrink-0">
         {!isGrouped && (
           <div className="h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
             {avatarUrl ? (
@@ -434,17 +488,17 @@ export const ConversationMessage = memo(function ConversationMessage({
       </div>
 
       {/* Message content column */}
-      <div className="min-w-0 flex-1">
+      <div className="mari-message-body min-w-0 flex-1">
         {/* Header — name + timestamp (only for first in group) */}
         {!isGrouped && (
-          <div className="flex items-baseline gap-2 mb-0.5">
+          <div className="mari-message-meta flex items-baseline gap-2 mb-0.5">
             <span
-              className="text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
+              className="mari-message-name text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
               style={nameColor ? { color: nameColor } : undefined}
             >
               {displayName}
             </span>
-            <span className="text-[0.6875rem] text-[var(--muted-foreground)]/60">
+            <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
               {formatTimestamp(message.createdAt)}
             </span>
           </div>
@@ -484,7 +538,7 @@ export const ConversationMessage = memo(function ConversationMessage({
         ) : (
           <div
             className={cn(
-              "text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap",
+              "mari-message-content text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap",
               isStreaming && !message.content && "py-1",
             )}
           >
@@ -501,6 +555,19 @@ export const ConversationMessage = memo(function ConversationMessage({
                   <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-[var(--foreground)]/50" />
                 )}
               </>
+            )}
+          </div>
+        )}
+
+        {/* Translation */}
+        {(translatedText || isTranslating) && (
+          <div className="mt-1.5 border-t border-[var(--border)] pt-1.5">
+            {isTranslating ? (
+              <span className="text-[0.75rem] italic text-[var(--muted-foreground)]">Translating…</span>
+            ) : (
+              <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--muted-foreground)]">
+                {translatedText}
+              </div>
             )}
           </div>
         )}
@@ -528,12 +595,18 @@ export const ConversationMessage = memo(function ConversationMessage({
       {!hideActions && (
         <div
           className={cn(
-            "absolute -top-3 right-4 flex items-center gap-0.5 rounded-md border border-white/20 bg-black/40 px-1 py-0.5 shadow-sm backdrop-blur-sm transition-all",
+            "mari-message-actions absolute -top-3 right-4 flex items-center gap-0.5 rounded-md border border-white/20 bg-black/40 px-1 py-0.5 shadow-sm backdrop-blur-sm transition-all",
             "opacity-0 group-hover:opacity-100",
             (showActions || forceShowActions) && "opacity-100",
           )}
         >
           <MsgAction icon={copied ? "✓" : <Copy size="0.75rem" />} onClick={handleCopy} title="Copy" />
+          <MsgAction
+            icon={<Languages size="0.75rem" />}
+            onClick={() => translate(message.id, message.content)}
+            title={translatedText ? "Hide translation" : "Translate"}
+            className={translatedText ? "text-blue-400" : undefined}
+          />
           <MsgAction icon={<Pencil size="0.75rem" />} onClick={onEditClick ?? startEditing} title="Edit" />
           {!isUser && (
             <MsgAction

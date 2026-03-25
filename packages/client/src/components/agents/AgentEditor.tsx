@@ -109,6 +109,7 @@ export function AgentEditor() {
   const [localPhase, setLocalPhase] = useState<AgentPhase>("post_processing");
   const [localConnectionId, setLocalConnectionId] = useState("");
   const [localContextSize, setLocalContextSize] = useState<number | "">("");
+  const [localRunInterval, setLocalRunInterval] = useState<number | "">("");
   const [localPrompt, setLocalPrompt] = useState("");
   const [localInjectAsSection, setLocalInjectAsSection] = useState(false);
   const [localEnabledTools, setLocalEnabledTools] = useState<string[]>([]);
@@ -146,6 +147,7 @@ export function AgentEditor() {
           : dbConfig.settings
         : {};
       setLocalContextSize(settings.contextSize ?? "");
+      setLocalRunInterval(settings.runInterval ?? "");
       setLocalInjectAsSection(settings.injectAsSection ?? false);
       setLocalEnabledTools(settings.enabledTools ?? DEFAULT_AGENT_TOOLS[dbConfig.type] ?? []);
       setLocalSpotifyClientId(settings.spotifyClientId ?? "");
@@ -158,6 +160,7 @@ export function AgentEditor() {
       setLocalPhase(builtIn.phase);
       setLocalConnectionId("");
       setLocalContextSize("");
+      setLocalRunInterval("");
       setLocalInjectAsSection(builtIn.defaultInjectAsSection ?? false);
       setLocalEnabledTools(DEFAULT_AGENT_TOOLS[builtIn.id] ?? []);
       setLocalSpotifyClientId("");
@@ -171,6 +174,7 @@ export function AgentEditor() {
       setLocalPhase("post_processing");
       setLocalConnectionId("");
       setLocalContextSize("");
+      setLocalRunInterval("");
       setLocalInjectAsSection(false);
       setLocalEnabledTools([]);
       setLocalSpotifyClientId("");
@@ -184,6 +188,9 @@ export function AgentEditor() {
 
   // Fetch Spotify connection status when viewing a Spotify agent
   const isSpotifyAgent = agentDetailId === "spotify" || dbConfig?.type === "spotify";
+
+  // Lorebook Keeper agent — run interval setting
+  const isLorebookKeeperAgent = agentDetailId === "lorebook-keeper" || dbConfig?.type === "lorebook-keeper";
 
   // Knowledge Retrieval agent — lorebook source selector
   const isKnowledgeRetrievalAgent = agentDetailId === "knowledge-retrieval" || dbConfig?.type === "knowledge-retrieval";
@@ -246,6 +253,7 @@ export function AgentEditor() {
       promptTemplate: localPrompt,
       settings: {
         ...(localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
+        ...(localRunInterval !== "" ? { runInterval: Number(localRunInterval) } : {}),
         ...(localInjectAsSection ? { injectAsSection: true } : {}),
         enabledTools: localEnabledTools,
         ...(localSpotifyClientId ? { spotifyClientId: localSpotifyClientId } : {}),
@@ -289,6 +297,7 @@ export function AgentEditor() {
     localConnectionId,
     localPrompt,
     localContextSize,
+    localRunInterval,
     localInjectAsSection,
     localEnabledTools,
     localSpotifyClientId,
@@ -531,6 +540,35 @@ export function AgentEditor() {
               When agents are batched together (same model), the highest context size in the group is used.
             </p>
           </FieldGroup>
+
+          {/* ── Run Interval (Lorebook Keeper) ── */}
+          {isLorebookKeeperAgent && (
+            <FieldGroup
+              label="Run Interval"
+              icon={<Clock size="0.875rem" className="text-[var(--primary)]" />}
+              help="How many assistant messages between each Lorebook Keeper run. Higher values reduce duplicates and save tokens. Set to 1 to run every message."
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={localRunInterval}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setLocalRunInterval(v === "" ? "" : Math.max(1, Math.min(100, parseInt(v) || 1)));
+                    markDirty();
+                  }}
+                  placeholder="8"
+                  className="w-28 rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm tabular-nums ring-1 ring-[var(--border)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                />
+                <span className="text-[0.6875rem] text-[var(--muted-foreground)]">messages</span>
+              </div>
+              <p className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                The agent runs once every N assistant messages instead of every response. Default: 8.
+              </p>
+            </FieldGroup>
+          )}
 
           {/* ── Inject as Prompt Section ── */}
           <FieldGroup

@@ -76,7 +76,7 @@ export function Modal({ open, onClose, title, children, width = "max-w-md" }: Mo
       aria-modal="true"
       aria-label={title}
       data-component="Modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="mari-modal fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{
         opacity: isEntering ? 1 : 0,
         transition: "opacity 150ms ease-out",
@@ -88,7 +88,7 @@ export function Modal({ open, onClose, title, children, width = "max-w-md" }: Mo
     >
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="mari-modal-backdrop absolute inset-0 bg-black/60 backdrop-blur-sm"
         style={{
           opacity: isEntering ? 1 : 0,
           transition: "opacity 150ms ease-out",
@@ -97,7 +97,7 @@ export function Modal({ open, onClose, title, children, width = "max-w-md" }: Mo
 
       {/* Panel - OS Window style */}
       <div
-        className={`os-window relative flex w-full flex-col ${width} max-h-[90vh] shadow-2xl shadow-black/50`}
+        className={`mari-modal-panel os-window relative flex w-full flex-col ${width} max-h-[90vh] shadow-2xl shadow-black/50`}
         style={{
           opacity: isEntering ? 1 : 0,
           transform: isEntering ? "scale(1) translateY(0)" : "scale(0.97) translateY(6px)",

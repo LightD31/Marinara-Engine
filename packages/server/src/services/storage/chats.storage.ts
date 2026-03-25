@@ -234,7 +234,16 @@ export function createChatsStorage(db: DB) {
 
     async updateMessageContent(id: string, content: string) {
       await db.update(messages).set({ content }).where(eq(messages.id, id));
-      return this.getMessage(id);
+      // Also sync the edit to the active swipe row so it persists across swipe switches
+      const msg = await this.getMessage(id);
+      if (msg) {
+        const swipes = await this.getSwipes(id);
+        const activeSwipe = swipes.find((s: any) => s.index === msg.activeSwipeIndex);
+        if (activeSwipe) {
+          await db.update(messageSwipes).set({ content }).where(eq(messageSwipes.id, activeSwipe.id));
+        }
+      }
+      return msg;
     },
 
     /** Merge partial data into a message's extra JSON field. */
@@ -311,7 +320,7 @@ export function createChatsStorage(db: DB) {
       const target = swipes.find((s: any) => s.index === index);
       if (!target) return null;
 
-      // Before switching, save current message extra onto the outgoing swipe
+      // Before switching, save current message content and extra onto the outgoing swipe
       const msg = await this.getMessage(messageId);
       if (msg) {
         const msgExtra = typeof msg.extra === "string" ? JSON.parse(msg.extra) : (msg.extra ?? {});
@@ -319,7 +328,7 @@ export function createChatsStorage(db: DB) {
         if (outgoingSwipe) {
           await db
             .update(messageSwipes)
-            .set({ extra: JSON.stringify(msgExtra) })
+            .set({ content: msg.content, extra: JSON.stringify(msgExtra) })
             .where(eq(messageSwipes.id, outgoingSwipe.id));
         }
       }

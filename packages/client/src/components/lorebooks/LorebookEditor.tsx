@@ -40,6 +40,7 @@ import {
   Sparkles,
   Loader2,
   Check,
+  Lock,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -234,6 +235,7 @@ export function LorebookEditor() {
         delay: entryForm.delay,
         group: entryForm.group,
         tag: entryForm.tag,
+        locked: entryForm.locked,
         preventRecursion: entryForm.preventRecursion,
       });
       setDirty(false);
@@ -258,6 +260,7 @@ export function LorebookEditor() {
   const handleDeleteEntry = useCallback(
     async (entryId: string) => {
       if (!lorebookId) return;
+      if (!confirm("Delete this lorebook entry?")) return;
       if (editingEntryId === entryId) setEditingEntryId(null);
       await deleteEntry.mutateAsync({ lorebookId, entryId });
     },
@@ -274,6 +277,7 @@ export function LorebookEditor() {
 
   const handleDelete = useCallback(async () => {
     if (!lorebookId) return;
+    if (!confirm("Delete this lorebook? All entries will be lost.")) return;
     await deleteLorebook.mutateAsync(lorebookId);
     closeDetail();
   }, [lorebookId, deleteLorebook, closeDetail]);
@@ -926,6 +930,12 @@ export function LorebookEditor() {
                         {entry.constant && (
                           <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-amber-400">
                             CONST
+                          </span>
+                        )}
+                        {entry.locked && (
+                          <span className="rounded bg-sky-400/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-sky-400">
+                            <Lock size="0.5rem" className="inline mr-0.5" />
+                            LOCKED
                           </span>
                         )}
                         {entry.tag && (

@@ -45,7 +45,11 @@ export function RightPanel() {
   const config = PANEL_CONFIG[panel] ?? { title: "Panel", icon: null, gradient: "from-slate-400 to-slate-500" };
 
   return (
-    <section data-component="RightPanel" aria-label={config.title} className="flex h-full flex-col">
+    <section
+      data-component="RightPanel"
+      aria-label={config.title}
+      className="mari-right-panel-content flex h-full flex-col"
+    >
       {/* Header - OS window style */}
       <div className="relative flex h-12 flex-shrink-0 items-center justify-between px-4">
         <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />

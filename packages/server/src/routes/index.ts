@@ -28,6 +28,7 @@ import { knowledgeSourcesRoutes } from "./knowledge-sources.routes.js";
 import { gifsRoutes } from "./gifs.routes.js";
 import { conversationRoutes } from "./conversation.routes.js";
 import { backupRoutes } from "./backup.routes.js";
+import { translateRoutes } from "./translate.routes.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(chatsRoutes, { prefix: "/api/chats" });
@@ -56,4 +57,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(gifsRoutes, { prefix: "/api/gifs" });
   await app.register(conversationRoutes, { prefix: "/api/conversation" });
   await app.register(backupRoutes, { prefix: "/api/backup" });
+  await app.register(translateRoutes, { prefix: "/api/translate" });
 }

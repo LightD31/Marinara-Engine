@@ -54,7 +54,7 @@ export function AppShell() {
   return (
     <div
       data-component="AppShell"
-      className="retro-scanlines noise-bg geometric-grid fixed inset-0 flex overflow-hidden bg-[var(--background)] max-md:pt-[env(safe-area-inset-top)]"
+      className="mari-app retro-scanlines noise-bg geometric-grid fixed inset-0 flex overflow-hidden bg-[var(--background)] max-md:pt-[env(safe-area-inset-top)]"
     >
       {/* Y2K decorative stars */}
       <div className="y2k-star hidden md:block" style={{ top: "10%", left: "5%", animationDelay: "0s" }} />
@@ -77,10 +77,10 @@ export function AppShell() {
         data-component="ChatSidebarPanel"
         aria-label="Chat list"
         className={cn(
-          "flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          "mari-sidebar flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
           sidebarOpen && "border-r border-[var(--sidebar-border)]/30",
           // Mobile: fixed overlay
-          "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:shadow-2xl",
+          "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:shadow-2xl max-md:pt-[env(safe-area-inset-top)]",
           !sidebarOpen && "max-md:!w-0",
         )}
         style={{ width: sidebarOpen ? (isMobile ? "100vw" : sidebarWidth) : 0 }}
@@ -95,7 +95,7 @@ export function AppShell() {
         data-tour="chat-area"
         data-component="CenterContent"
         aria-label="Main content"
-        className="flex flex-1 flex-col overflow-hidden"
+        className="mari-main flex flex-1 flex-col overflow-hidden"
       >
         <TopBar />
         {regexDetailId ? (
@@ -136,7 +136,7 @@ export function AppShell() {
               transition={{ type: "spring", damping: 28, stiffness: 350 }}
               data-component="RightPanelMobile"
               aria-label="Settings and tools panel"
-              className="!fixed inset-y-0 right-0 z-50 !w-full shadow-2xl overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl"
+              className="mari-right-panel !fixed inset-y-0 right-0 z-50 !w-full shadow-2xl overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl pt-[env(safe-area-inset-top)]"
             >
               <RightPanel />
             </motion.aside>
@@ -147,7 +147,7 @@ export function AppShell() {
           data-component="RightPanelDesktop"
           aria-label="Settings and tools panel"
           className={cn(
-            "flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+            "mari-right-panel flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
             rightPanelOpen && "border-l border-[var(--sidebar-border)]/30",
           )}
           style={{ width: rightPanelOpen ? "20rem" : 0 }}

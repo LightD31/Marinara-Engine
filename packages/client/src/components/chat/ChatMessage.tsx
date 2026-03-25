@@ -17,12 +17,14 @@ import {
   Flag,
   Eye,
   Brain,
+  Languages,
 } from "lucide-react";
 import type { Message } from "@marinara-engine/shared";
 import { memo, useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react";
 import type { CharacterMap } from "./ChatArea";
 import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useUIStore } from "../../stores/ui.store";
+import { useTranslate } from "../../hooks/use-translate";
 import DOMPurify from "dompurify";
 
 /** Isolated edit textarea — uncontrolled to avoid React re-renders on every keystroke. */
@@ -54,7 +56,7 @@ const EditTextarea = memo(function EditTextarea({
     <div className="flex flex-col gap-2">
       <textarea
         ref={ref}
-        defaultValue={initialContent}
+        defaultValue={initialContent.replace(/[\u201C\u201D\u201E\u201F]/g, '"').replace(/[\u2018\u2019]/g, "'")}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSave();
           if (e.key === "Escape") onCancel();
@@ -107,6 +109,54 @@ interface ChatMessageProps {
   personaInfo?: PersonaInfo;
   groupChatMode?: string;
   chatCharacterIds?: string[];
+  /** Distance from the latest message (0 = newest). Used for depth-range regex filtering. */
+  messageDepth?: number;
+}
+
+/** Regex to match markdown headings at the start of a line. */
+const HEADING_RE = /^(#{1,6})\s+(.+)$/;
+/** Regex to match horizontal rules: *** / --- (3+ chars, standalone line). */
+const HR_LINE_RE = /^(?:\*{3,}|-{3,})$/;
+
+/**
+ * Split text into heading / horizontal-rule and non-heading segments,
+ * rendering headings as proper HTML heading elements and `---` / `***`
+ * as `<hr>`, then delegating the rest to the given renderer.
+ */
+function renderWithHeadings(text: string, renderSegment: (segment: string) => ReactNode): ReactNode {
+  const lines = text.split("\n");
+  const segments: ReactNode[] = [];
+  let buffer: string[] = [];
+  let key = 0;
+
+  const flushBuffer = () => {
+    if (buffer.length > 0) {
+      segments.push(<span key={`seg${key++}`}>{renderSegment(buffer.join("\n"))}</span>);
+      buffer = [];
+    }
+  };
+
+  for (const line of lines) {
+    const hMatch = HEADING_RE.exec(line);
+    if (hMatch) {
+      flushBuffer();
+      const level = hMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
+      const Tag = `h${level}` as const;
+      segments.push(
+        <Tag key={`h${key++}`} className="mari-md-heading">
+          {hMatch[2]}
+        </Tag>,
+      );
+    } else if (HR_LINE_RE.test(line.trim())) {
+      flushBuffer();
+      segments.push(<hr key={`hr${key++}`} className="my-3 border-t border-[var(--border)]" />);
+    } else {
+      buffer.push(line);
+    }
+  }
+  flushBuffer();
+
+  return segments.length === 1 ? segments[0] : <>{segments}</>;
 }
 
 /** Regex to match <speaker="name">dialogue</speaker> tags. */
@@ -255,21 +305,11 @@ function renderContent(
   const withoutSpeakerTags = normalized.replace(/<\/?speaker(?:="[^"]*")?>/g, "");
 
   if (!HTML_TAG_RE.test(withoutSpeakerTags)) {
-    // Split on *** horizontal rules (standalone line)
-    const hrParts = normalized.split(/^\*{3,}$/m);
-    if (hrParts.length > 1) {
-      return (
-        <>
-          {hrParts.map((part, i) => (
-            <span key={i}>
-              {i > 0 && <hr className="my-3 border-t border-[var(--border)]" />}
-              {renderWithSpeakerTags(part, dialogueColor, speakerColorMap, boldDialogue)}
-            </span>
-          ))}
-        </>
-      );
-    }
-    return <>{renderWithSpeakerTags(normalized, dialogueColor, speakerColorMap, boldDialogue)}</>;
+    // renderWithHeadings handles headings, *** and --- horizontal rules,
+    // and delegates the rest to speaker-tag / dialogue rendering.
+    return renderWithHeadings(normalized, (seg) => (
+      <>{renderWithSpeakerTags(seg, dialogueColor, speakerColorMap, boldDialogue)}</>
+    ));
   }
 
   // For HTML content, replace speaker tags with color-annotated spans (preserves per-character colors)
@@ -283,8 +323,9 @@ function renderContent(
   // Convert newlines to <br> with compact spacing for HTML content,
   // but preserve newlines inside <style> blocks (they're harmless in CSS
   // and injecting <br> tags would corrupt the stylesheet).
-  const withBreaks = stripped.replace(/(<style[\s\S]*?<\/style>)|\n/gi, (m, styleBlock) =>
-    styleBlock ? styleBlock : '<br style="display:block;margin:0.2em 0">',
+  // Also skip newlines that sit between HTML tags (source formatting only).
+  const withBreaks = stripped.replace(/(<style[\s\S]*?<\/style>)|(>\s*)\n(\s*<)|\n/gi, (m, styleBlock, pre, post) =>
+    styleBlock ? styleBlock : pre ? `${pre}${post}` : '<br style="display:block;margin:0.2em 0">',
   );
 
   // Content has HTML — sanitize and render it
@@ -324,14 +365,19 @@ function renderContent(
       })()
     : clean;
 
-  // Convert *** horizontal rules to <hr> tags in HTML path
+  // Convert *** and --- horizontal rules to <hr> tags in HTML path
   const withHr = withDialogue.replace(
-    /(?:^|(?<=<br[^>]*>))\s*\*{3,}\s*(?:$|(?=<br[^>]*>))/g,
+    /(?:^|(?<=<br[^>]*>))\s*(?:\*{3,}|-{3,})\s*(?:$|(?=<br[^>]*>))/g,
     '<hr style="margin:0.75em 0;border:0;border-top:1px solid var(--border)">',
   );
 
   // Apply markdown-style bold/italic in HTML path
   const withMarkdown = withHr
+    // Headings: # through ######
+    .replace(/(?:^|(?<=<br[^>]*>))\s*(#{1,6})\s+(.+?)(?=<br|$)/g, (_m, hashes: string, content: string) => {
+      const level = hashes.length;
+      return `<h${level} class="mari-md-heading">${content.trim()}</h${level}>`;
+    })
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
 
@@ -369,6 +415,7 @@ export const ChatMessage = memo(function ChatMessage({
   personaInfo,
   groupChatMode,
   chatCharacterIds,
+  messageDepth,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -381,6 +428,11 @@ export const ChatMessage = memo(function ChatMessage({
   const [showActions, setShowActions] = useState(false);
   const scrollRestoreRef = useRef<{ el: HTMLElement; top: number } | null>(null);
   const msgRef = useRef<HTMLDivElement>(null);
+
+  // Translation
+  const { translate, translations, translating } = useTranslate();
+  const translatedText = translations[message.id];
+  const isTranslating = !!translating[message.id];
 
   // Dismiss actions when tapping outside on mobile
   useEffect(() => {
@@ -465,12 +517,12 @@ export const ChatMessage = memo(function ChatMessage({
   const charName = charInfo?.name ?? message.characterId ?? "Assistant";
 
   const displayContent = useMemo(() => {
-    let text = isUser || isSystem ? message.content : applyToAIOutput(message.content);
+    let text = isUser || isSystem ? message.content : applyToAIOutput(message.content, messageDepth);
     // Resolve common display macros
     text = text.replaceAll("{{user}}", userName);
     text = text.replaceAll("{{char}}", charName);
     return text;
-  }, [message.content, isUser, isSystem, applyToAIOutput, userName, charName]);
+  }, [message.content, isUser, isSystem, applyToAIOutput, messageDepth, userName, charName]);
 
   const displayName = isUser ? userName : charName;
   const avatarUrl = isUser ? (personaInfo?.avatarUrl ?? null) : (charInfo?.avatarUrl ?? null);
@@ -614,8 +666,8 @@ export const ChatMessage = memo(function ChatMessage({
   // ─── System messages (shared across modes) ───
   if (isSystem) {
     return (
-      <div className="flex justify-center py-2">
-        <div className="rounded-full bg-[var(--secondary)] px-4 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)]">
+      <div className="mari-system-message flex justify-center py-2">
+        <div className="mari-system-message-content rounded-full bg-[var(--secondary)] px-4 py-1.5 text-[0.6875rem] text-[var(--muted-foreground)]">
           {message.content}
         </div>
       </div>
@@ -629,8 +681,12 @@ export const ChatMessage = memo(function ChatMessage({
     // Narrator messages
     if (isNarrator) {
       return (
-        <div ref={msgRef} className="rpg-narrator-msg group mb-4 px-2" onClick={handleMobileTap}>
-          <div className="relative rounded-xl border border-amber-500/10 bg-black/40 px-5 py-4">
+        <div
+          ref={msgRef}
+          className="mari-message mari-message-narrator rpg-narrator-msg group mb-4 px-2"
+          onClick={handleMobileTap}
+        >
+          <div className="mari-message-bubble relative rounded-xl border border-amber-500/10 bg-black/40 px-5 py-4">
             {/* Delete button */}
             {onDelete && (
               <button
@@ -650,7 +706,7 @@ export const ChatMessage = memo(function ChatMessage({
               <span className="h-px flex-1 bg-amber-400/20" />
             </div>
             <div
-              className="whitespace-pre-wrap break-words text-amber-100/80 italic"
+              className="mari-message-content whitespace-pre-wrap break-words text-amber-100/80 italic"
               style={{ fontSize: chatFontSize, lineHeight: 1.5 }}
             >
               {displayContent}
@@ -664,12 +720,17 @@ export const ChatMessage = memo(function ChatMessage({
       <>
         <div
           ref={msgRef}
-          className={cn("group mb-4 flex gap-3 px-2", isUser && "flex-row-reverse")}
+          className={cn(
+            "mari-message group mb-4 flex gap-3 px-2",
+            isUser ? "mari-message-user flex-row-reverse" : "mari-message-assistant",
+          )}
+          data-message-id={message.id}
+          data-message-role={message.role}
           onClick={handleMobileTap}
         >
           {/* Avatar Column */}
           {!isGrouped && (
-            <div className="flex-shrink-0 pt-1">
+            <div className="mari-message-avatar flex-shrink-0 pt-1">
               {isMergedGroup && mergedAvatars.length > 0 ? (
                 <div className="rpg-avatar-glow relative h-10 w-10 overflow-hidden rounded-full ring-2 ring-white/10">
                   {mergedAvatars.map((avatar, i) => (
@@ -715,13 +776,19 @@ export const ChatMessage = memo(function ChatMessage({
           {isGrouped && <div className="w-10 flex-shrink-0" />}
 
           {/* Content */}
-          <div className={cn("flex min-w-0 max-w-[82%] flex-col gap-0.5", isUser && "items-end", editing && "w-[82%]")}>
+          <div
+            className={cn(
+              "mari-message-body flex min-w-0 max-w-[82%] flex-col gap-0.5",
+              isUser && "items-end",
+              editing && "w-[82%]",
+            )}
+          >
             {/* Name + time (only if not grouped) */}
             {!isGrouped && (
               <div className={cn("flex items-baseline gap-2 px-1", isUser && "flex-row-reverse")}>
                 <span
                   className={cn(
-                    "text-[0.75rem] font-bold tracking-tight",
+                    "mari-message-name text-[0.75rem] font-bold tracking-tight",
                     !msgNameColor && !isMergedGroup && (isUser ? "text-neutral-300" : "rpg-char-name"),
                   )}
                   style={!isMergedGroup ? nameColorStyle(msgNameColor) : undefined}
@@ -751,7 +818,7 @@ export const ChatMessage = memo(function ChatMessage({
             {/* Message bubble */}
             <div
               className={cn(
-                "relative overflow-hidden rounded-2xl px-4 py-3 shadow-lg shadow-black/20",
+                "mari-message-bubble relative overflow-hidden rounded-2xl px-4 py-3 shadow-lg shadow-black/20",
                 isUser
                   ? "rounded-tr-sm text-neutral-100 ring-1 ring-white/10"
                   : "rounded-tl-sm text-white/90 ring-1 ring-white/8",
@@ -775,28 +842,42 @@ export const ChatMessage = memo(function ChatMessage({
                   onCancel={handleCancelEdit}
                 />
               ) : (
-                <div className={cn("break-words", !isHtmlContent && "whitespace-pre-wrap")}>
-                  {isStreaming && !message.content ? (
-                    <div className="flex items-center gap-1 py-0.5">
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:0ms]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:150ms]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:300ms]" />
-                    </div>
-                  ) : (
-                    <>
-                      {renderedContent}
-                      {isStreaming && (
-                        <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-blue-400" />
+                <>
+                  <div className={cn("mari-message-content break-words", !isHtmlContent && "whitespace-pre-wrap")}>
+                    {isStreaming && !message.content ? (
+                      <div className="mari-message-typing flex items-center gap-1 py-0.5">
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:0ms]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:150ms]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400/60 [animation-delay:300ms]" />
+                      </div>
+                    ) : (
+                      <>
+                        {renderedContent}
+                        {isStreaming && (
+                          <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-blue-400" />
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {/* Translation */}
+                  {(translatedText || isTranslating) && (
+                    <div className="mt-2 border-t border-white/10 pt-2">
+                      {isTranslating ? (
+                        <span className="text-[0.75rem] italic text-white/40">Translating…</span>
+                      ) : (
+                        <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-blue-200/70">
+                          {translatedText}
+                        </div>
                       )}
-                    </>
+                    </div>
                   )}
-                </div>
+                </>
               )}
             </div>
 
             {/* Swipes */}
             {hasSwipes && (
-              <div className="flex items-center gap-1.5 px-1 text-[0.625rem] text-white/40">
+              <div className="mari-message-swipes flex items-center gap-1.5 px-1 text-[0.625rem] text-white/40">
                 <button
                   className="rounded-md p-0.5 transition-colors hover:bg-white/10 disabled:opacity-30"
                   onClick={handleSwipePrev}
@@ -820,12 +901,19 @@ export const ChatMessage = memo(function ChatMessage({
             {/* Hover actions (tap to toggle on mobile) */}
             <div
               className={cn(
-                "flex items-center gap-0.5 px-1 opacity-0 transition-all group-hover:opacity-100",
+                "mari-message-actions flex items-center gap-0.5 px-1 opacity-0 transition-all group-hover:opacity-100",
                 isUser && "flex-row-reverse",
                 showActions && "opacity-100",
               )}
             >
               <ActionBtn icon={copied ? "\u2713" : <Copy size="0.6875rem" />} onClick={handleCopy} title="Copy" dark />
+              <ActionBtn
+                icon={<Languages size="0.6875rem" />}
+                onClick={() => translate(message.id, message.content)}
+                title={translatedText ? "Hide translation" : "Translate"}
+                className={translatedText ? "text-blue-400/80 hover:text-blue-300" : undefined}
+                dark
+              />
               <ActionBtn icon={<Pencil size="0.6875rem" />} onClick={startEditing} title="Edit" dark />
               <ActionBtn
                 icon={<RefreshCw size="0.6875rem" />}
@@ -880,7 +968,13 @@ export const ChatMessage = memo(function ChatMessage({
   return (
     <div
       ref={msgRef}
-      className={cn("group flex", isUser ? "justify-end" : "justify-start", isGrouped ? "mb-0.5" : "mb-3")}
+      className={cn(
+        "mari-message group flex",
+        isUser ? "mari-message-user justify-end" : "mari-message-assistant justify-start",
+        isGrouped ? "mb-0.5" : "mb-3",
+      )}
+      data-message-id={message.id}
+      data-message-role={message.role}
       onClick={handleMobileTap}
     >
       <div
@@ -888,7 +982,7 @@ export const ChatMessage = memo(function ChatMessage({
       >
         {/* Avatar — only show for first in group */}
         {(!isUser || avatarUrl) && (
-          <div className={cn("flex-shrink-0 self-end", isGrouped && "invisible")}>
+          <div className={cn("mari-message-avatar flex-shrink-0 self-end", isGrouped && "invisible")}>
             {isMergedGroup && mergedAvatars.length > 0 ? (
               <div className="relative h-8 w-8 overflow-hidden rounded-full">
                 {mergedAvatars.map((avatar, i) => (
@@ -922,12 +1016,18 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
-        <div className={cn("flex flex-col gap-0.5", isUser ? "items-end" : "items-start", editing && "w-full")}>
+        <div
+          className={cn(
+            "mari-message-body flex flex-col gap-0.5",
+            isUser ? "items-end" : "items-start",
+            editing && "w-full",
+          )}
+        >
           {/* Name — only for first in group */}
           {!isGrouped && !isUser && (
             <span
               className={cn(
-                "px-3 text-[0.6875rem] font-semibold",
+                "mari-message-name px-3 text-[0.6875rem] font-semibold",
                 !msgNameColor && !isMergedGroup && "text-[var(--muted-foreground)]",
               )}
               style={!isMergedGroup ? nameColorStyle(msgNameColor) : undefined}
@@ -950,7 +1050,7 @@ export const ChatMessage = memo(function ChatMessage({
           {/* Bubble */}
           <div
             className={cn(
-              "texting-bubble relative px-3.5 py-2",
+              "mari-message-bubble texting-bubble relative px-3.5 py-2",
               isUser
                 ? "texting-bubble-user rounded-2xl rounded-br-md"
                 : "texting-bubble-other rounded-2xl rounded-bl-md",
@@ -970,29 +1070,45 @@ export const ChatMessage = memo(function ChatMessage({
                 onCancel={handleCancelEdit}
               />
             ) : (
-              <div className={cn("break-words", !isHtmlContent && "whitespace-pre-wrap")}>
-                {isStreaming && !message.content ? (
-                  <div className="flex items-center gap-1 py-0.5">
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
-                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
-                  </div>
-                ) : (
-                  <>
-                    {renderedContent}
-                    {isStreaming && (
-                      <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-white/70" />
+              <>
+                <div className={cn("mari-message-content break-words", !isHtmlContent && "whitespace-pre-wrap")}>
+                  {isStreaming && !message.content ? (
+                    <div className="mari-message-typing flex items-center gap-1 py-0.5">
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
+                      <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
+                    </div>
+                  ) : (
+                    <>
+                      {renderedContent}
+                      {isStreaming && (
+                        <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-white/70" />
+                      )}
+                    </>
+                  )}
+                </div>
+                {/* Translation */}
+                {(translatedText || isTranslating) && (
+                  <div className="mt-2 border-t border-[var(--border)] pt-2">
+                    {isTranslating ? (
+                      <span className="text-[0.75rem] italic text-[var(--muted-foreground)]">Translating…</span>
+                    ) : (
+                      <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--muted-foreground)]">
+                        {translatedText}
+                      </div>
                     )}
-                  </>
+                  </div>
                 )}
-              </div>
+              </>
             )}
           </div>
 
           {/* Timestamp + model — only for last in a group or standalone */}
           {!isGrouped && (
-            <div className={cn("flex items-center gap-2 px-3", isUser && "flex-row-reverse")}>
-              <span className="text-[0.625rem] text-[var(--muted-foreground)]/50">{formatTime(message.createdAt)}</span>
+            <div className={cn("mari-message-meta flex items-center gap-2 px-3", isUser && "flex-row-reverse")}>
+              <span className="mari-message-timestamp text-[0.625rem] text-[var(--muted-foreground)]/50">
+                {formatTime(message.createdAt)}
+              </span>
               {genLabel && (
                 <span
                   className="text-[0.5625rem] text-[var(--muted-foreground)]/40 italic truncate max-w-[15.625rem]"
@@ -1006,7 +1122,7 @@ export const ChatMessage = memo(function ChatMessage({
 
           {/* Swipes */}
           {hasSwipes && (
-            <div className="flex items-center gap-1.5 px-2 text-[0.625rem] text-[var(--muted-foreground)]">
+            <div className="mari-message-swipes flex items-center gap-1.5 px-2 text-[0.625rem] text-[var(--muted-foreground)]">
               <button
                 className="rounded p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
                 onClick={handleSwipePrev}
@@ -1030,12 +1146,18 @@ export const ChatMessage = memo(function ChatMessage({
           {/* Hover actions (tap to toggle on mobile) */}
           <div
             className={cn(
-              "flex items-center gap-0 px-1 opacity-0 transition-all group-hover:opacity-100",
+              "mari-message-actions flex items-center gap-0 px-1 opacity-0 transition-all group-hover:opacity-100",
               isUser && "flex-row-reverse",
               showActions && "opacity-100",
             )}
           >
             <ActionBtn icon={copied ? "✓" : <Copy size="0.625rem" />} onClick={handleCopy} title="Copy" />
+            <ActionBtn
+              icon={<Languages size="0.625rem" />}
+              onClick={() => translate(message.id, message.content)}
+              title={translatedText ? "Hide translation" : "Translate"}
+              className={translatedText ? "text-blue-500" : undefined}
+            />
             <ActionBtn icon={<Pencil size="0.625rem" />} onClick={startEditing} title="Edit" />
             <ActionBtn
               icon={<RefreshCw size="0.625rem" />}

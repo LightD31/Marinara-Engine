@@ -90,6 +90,18 @@ export function createAgentsStorage(db: DB) {
       return id;
     },
 
+    /** Get the most recent successful run of an agent type in a given chat. */
+    async getLastSuccessfulRunByType(agentType: string, chatId: string) {
+      const rows = await db
+        .select()
+        .from(agentRuns)
+        .innerJoin(agentConfigs, eq(agentRuns.agentConfigId, agentConfigs.id))
+        .where(and(eq(agentConfigs.type, agentType), eq(agentRuns.chatId, chatId), eq(agentRuns.success, "true")))
+        .orderBy(desc(agentRuns.createdAt))
+        .limit(1);
+      return rows[0]?.agent_runs ?? null;
+    },
+
     // ── Agent Memory (persistent KV per agent per chat) ──
 
     async getMemory(agentConfigId: string, chatId: string): Promise<Record<string, unknown>> {
