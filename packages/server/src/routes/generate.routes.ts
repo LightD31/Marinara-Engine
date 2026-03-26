@@ -506,9 +506,15 @@ export async function generateRoutes(app: FastifyInstance) {
             personaName,
             personaDescription,
             personaFields,
-            personaStats: persona?.personaStats
-              ? typeof persona.personaStats === "string" ? JSON.parse(persona.personaStats) : persona.personaStats
-              : undefined,
+            personaStats: (() => {
+              if (!persona?.personaStats) return undefined;
+              if (typeof persona.personaStats !== "string") return persona.personaStats;
+              try {
+                return JSON.parse(persona.personaStats);
+              } catch {
+                return undefined;
+              }
+            })(),
             chatMessages: mappedMessages,
             chatSummary: (chatMeta.summary as string) ?? null,
             enableAgents: chatEnableAgents,
@@ -1731,10 +1737,15 @@ export async function generateRoutes(app: FastifyInstance) {
                 scenario: personaFields.scenario || undefined,
                 ...(persona?.personaStats
                   ? (() => {
-                      const pStats =
-                        typeof persona.personaStats === "string"
-                          ? JSON.parse(persona.personaStats)
-                          : persona.personaStats;
+                      let pStats: any;
+                      try {
+                        pStats =
+                          typeof persona.personaStats === "string"
+                            ? JSON.parse(persona.personaStats)
+                            : persona.personaStats;
+                      } catch {
+                        return {};
+                      }
                       // Merge current values from gameState so the agent sees
                       // live stats instead of the persona's default config.
                       if (pStats?.bars && gameState?.personaStats && Array.isArray(gameState.personaStats)) {
@@ -1751,19 +1762,11 @@ export async function generateRoutes(app: FastifyInstance) {
                       }
                       // Only include enabled bars
                       if (pStats && !pStats.enabled) delete pStats.bars;
-                      return { personaStats: pStats };
-                    })()
-                  : {}),
-                ...(persona?.personaStats
-                  ? (() => {
-                      const pStats =
-                        typeof persona.personaStats === "string"
-                          ? JSON.parse(persona.personaStats)
-                          : persona.personaStats;
+                      const result: Record<string, unknown> = { personaStats: pStats };
                       if (pStats?.rpgStats?.enabled) {
-                        return { rpgStats: pStats.rpgStats };
+                        result.rpgStats = pStats.rpgStats;
                       }
-                      return {};
+                      return result;
                     })()
                   : {}),
               }
@@ -4235,9 +4238,13 @@ export async function generateRoutes(app: FastifyInstance) {
             }
           }
           if (persona.personaStats) {
-            const pStats = typeof persona.personaStats === "string" ? JSON.parse(persona.personaStats) : persona.personaStats;
-            if (pStats?.enabled) retryPersonaStats = pStats;
-            if (pStats?.rpgStats?.enabled) retryRpgStats = pStats.rpgStats;
+            try {
+              const pStats = typeof persona.personaStats === "string" ? JSON.parse(persona.personaStats) : persona.personaStats;
+              if (pStats?.enabled) retryPersonaStats = pStats;
+              if (pStats?.rpgStats?.enabled) retryRpgStats = pStats.rpgStats;
+            } catch {
+              /* ignore malformed personaStats JSON */
+            }
           }
         }
       }

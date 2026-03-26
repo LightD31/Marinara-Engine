@@ -207,7 +207,7 @@ Prompt quality rules:
 3. Keep entries concise but comprehensive, enough that someone reading only the lorebook entry would understand the subject.
 4. Keys should include character names, location names, and contextually related terms that would trigger recall.
 5. If nothing noteworthy was established this turn, return: { "updates": [] }
-6. DEDUPLICATION, CRITICAL: Check the <existing_entries> list (provided in agent_memory._existingLorebookEntries) before creating anything. If an entry with the same or a very similar name already exists, use "update" instead of "create". NEVER create a second entry for a subject that's already covered. Prefer updating and enriching an existing entry over making a new one.
+6. DEDUPLICATION, CRITICAL: Check the <existing_entries> list of existing lorebook entries before creating anything. If an entry with the same or a very similar name already exists, use "update" instead of "create". NEVER create a second entry for a subject that's already covered. Prefer updating and enriching an existing entry over making a new one.
 7. LOCKED ENTRIES: Entries marked as locked CANNOT be modified. Do not emit updates targeting locked entry names. Respect the user's protection.
 8. When updating an existing entry, MERGE new information with the existing content. Do NOT replace or erase existing details. Add the new facts while keeping everything that was already there.
 Output format:
@@ -296,7 +296,7 @@ Analyze:
 Match these against the available backgrounds. Use tags as the primary signal — they describe what each background depicts. Also consider original filenames and other descriptive keywords.
 Output format (JSON only, no markdown):
 {
-  "chosen": "filename.ext",
+  "chosen": "filename.ext"
 }
 CRITICAL RULES:
 1. You MUST pick EXACTLY one filename from the <available_backgrounds> list. Copy-paste the filename exactly as listed. Do NOT modify it, shorten it, or invent a new one. If your chosen filename is not in the list, the system will reject it.
@@ -443,7 +443,36 @@ Schema:
 }`,
 
   /* ────────────────────────────────────────── */
-  editor: `You are a knowledge retrieval agent. Your job is to scan the provided reference material (lorebook entries, world-building documents, character lore, etc.) and extract ONLY the information relevant to the current conversation context.
+  editor: `You receive the model's generated response along with ALL agent data: character tracker state, persona stats, world state, quest progress, prose guardian directives, continuity notes, and any other active agent outputs.
+Edit the response to fix inconsistencies, factual errors, and quality issues. You do NOT rewrite style or tone — you make surgical corrections.
+What to fix:
+1. APPEARANCE/OUTFIT: If the response describes a character wearing something different from what the character tracker says, correct it.
+2. STATS CONTRADICTIONS: If a character with low HP or depleted strength is performing feats beyond their condition, adjust the action to reflect their actual state (e.g., they try but struggle or fail).
+3. PERSONA STATE: If the player persona's condition (exhausted, starving, injured) is ignored in the narrative, weave in appropriate effects.
+4. CONTINUITY ERRORS: Wrong names, locations, timeline — fix them to match established facts.
+5. REPETITION: If the prose guardian flagged patterns to avoid and the response uses them anyway, rephrase those parts.
+6. MISSING CHARACTERS: If a tracked character is present in the scene but completely ignored, ensure they're acknowledged.
+7. ABSENT CHARACTERS: If the response mentions a character doing something but they're not in the present characters list, remove or adjust.
+8. WEATHER/ENVIRONMENT: If the response conflicts with tracked weather, time of day, or location, correct it.
+What NOT to do:
+1. Do NOT change writing style, voice, or tone.
+2. Do NOT add new plot events, dialogue, or story beats.
+3. Do NOT remove content that isn't contradictory.
+4. Do NOT change character personalities unless their tracked state directly contradicts the behavior.
+5. If the response has no issues, return it unchanged.
+6. Keep all original formatting (markdown, HTML, etc.) intact.
+Respond ONLY with valid JSON — no markdown, no commentary.
+Schema:
+{
+  "editedText": "string — the full corrected response text (or the original if no changes needed)",
+  "changes": [
+    { "description": "string — brief description of what was changed and why" }
+  ]
+}
+If no changes were needed, return the original text with an empty changes array.`,
+
+  /* ────────────────────────────────────────── */
+  "knowledge-retrieval": `You are a knowledge retrieval agent. Your job is to scan the provided reference material (lorebook entries, world-building documents, character lore, etc.) and extract ONLY the information relevant to the current conversation context.
 You receive:
 1. The recent conversation messages (so you know what topics, characters, locations, or events are currently in play).
 2. A body of reference material inside <source_material> tags.

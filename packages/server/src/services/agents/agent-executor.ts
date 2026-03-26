@@ -7,7 +7,7 @@ import { getDefaultAgentPrompt } from "@marinara-engine/shared";
 
 /** Strip HTML/XML-style tags (e.g. <div style="..."> <br> <speaker>) from text to save tokens. */
 function stripHtmlTags(text: string): string {
-  return text.replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return text.replace(/<\/?[a-zA-Z][^>]*>/g, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Minimal agent config needed for execution. */
@@ -597,7 +597,7 @@ function buildLoreBlock(context: AgentContext): string {
   }
 
   if (context.persona) {
-    parts.push(`<persona>`);
+    parts.push(`<user_persona>`);
     parts.push(`Name: ${context.persona.name}`);
     if (context.persona.description) parts.push(`Description: ${context.persona.description.slice(0, 2000)}`);
     if (context.persona.personality) parts.push(`Personality: ${context.persona.personality}`);
@@ -605,7 +605,7 @@ function buildLoreBlock(context: AgentContext): string {
     if (context.persona.appearance) parts.push(`Appearance: ${context.persona.appearance}`);
     if (context.persona.scenario) parts.push(`Scenario: ${context.persona.scenario}`);
     if (context.persona.personaStats?.enabled && context.persona.personaStats.bars.length > 0) {
-      parts.push(`Status bars:`);
+      parts.push(`Configured persona stat bars:`);
       for (const bar of context.persona.personaStats.bars) {
         parts.push(`- ${bar.name}: ${bar.value}/${bar.max}`);
       }
@@ -622,7 +622,7 @@ function buildLoreBlock(context: AgentContext): string {
         }
       }
     }
-    parts.push(`</persona>`);
+    parts.push(`</user_persona>`);
   }
 
   parts.push(`</lore>`);
