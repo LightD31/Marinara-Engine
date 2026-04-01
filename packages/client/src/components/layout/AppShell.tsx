@@ -15,12 +15,13 @@ import { BotBrowserView } from "../bot-browser/BotBrowserView";
 import { RightPanel } from "./RightPanel";
 import { TopBar } from "./TopBar";
 import { OnboardingTutorial } from "../onboarding/OnboardingTutorial";
+import { ChatNotificationBubbles } from "../chat/ChatNotificationBubbles";
 import { useUIStore } from "../../stores/ui.store";
 import { useBackgroundAutonomousPolling } from "../../hooks/use-background-autonomous";
 import { useIdleDetection } from "../../hooks/use-idle-detection";
 import { cn } from "../../lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 export function AppShell() {
   // Background autonomous polling for inactive conversation chats
@@ -63,6 +64,55 @@ export function AppShell() {
       cancelAnimationFrame(rafId);
     };
   }, [isMobile]);
+
+  // ── Center-area overflow detection ──
+  // When the center <main> content overflows horizontally, switch to compact
+  // layout. Uses hysteresis to prevent toggling back-and-forth.
+  const mainRef = useRef<HTMLElement>(null);
+  const compactWidthRef = useRef(0); // width when we last switched to compact
+  const setCenterCompact = useUIStore((s) => s.setCenterCompact);
+
+  const checkOverflow = useCallback(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const compact = useUIStore.getState().centerCompact;
+    const width = el.clientWidth;
+
+    if (compact) {
+      // Currently compact — switch back only if width grew past the
+      // threshold where we entered compact + a comfort buffer.
+      if (width > compactWidthRef.current + 80) {
+        setCenterCompact(false);
+      }
+    } else {
+      // Currently wide — walk immediate children looking for overflow.
+      let overflows = false;
+      const scan = (node: Element, depth: number) => {
+        if (overflows || depth > 3) return;
+        if (node.scrollWidth > node.clientWidth + 2) {
+          overflows = true;
+          return;
+        }
+        for (let i = 0; i < node.children.length; i++) {
+          scan(node.children[i], depth + 1);
+        }
+      };
+      scan(el, 0);
+      if (overflows) {
+        compactWidthRef.current = width;
+        setCenterCompact(true);
+      }
+    }
+  }, [setCenterCompact]);
+
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(checkOverflow);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [checkOverflow]);
+
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const characterDetailId = useUIStore((s) => s.characterDetailId);
   const lorebookDetailId = useUIStore((s) => s.lorebookDetailId);
@@ -115,10 +165,11 @@ export function AppShell() {
 
       {/* Center content */}
       <main
+        ref={mainRef}
         data-tour="chat-area"
         data-component="CenterContent"
         aria-label="Main content"
-        className="mari-main flex min-w-0 flex-1 flex-col overflow-hidden"
+        className="@container mari-main flex min-w-0 flex-1 flex-col overflow-hidden"
       >
         <TopBar />
         {botBrowserOpen ? (
@@ -182,6 +233,9 @@ export function AppShell() {
           </div>
         </aside>
       )}
+
+      {/* Floating avatar notification bubbles (left edge) */}
+      <ChatNotificationBubbles />
 
       {/* First-time onboarding tutorial */}
       <OnboardingTutorial />

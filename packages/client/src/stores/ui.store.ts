@@ -154,6 +154,9 @@ interface UIState {
   /** Effective status: matches manual, but auto-flips to "idle" on inactivity */
   userStatus: UserStatus;
 
+  /** Transient: true when center content area is too narrow (overflow detected) */
+  centerCompact: boolean;
+
   // Actions
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -211,6 +214,7 @@ interface UIState {
   setChatFontOpacity: (v: number) => void;
   setTextStrokeWidth: (v: number) => void;
   setTextStrokeColor: (v: string) => void;
+  setCenterCompact: (v: boolean) => void;
   setVisualTheme: (v: VisualTheme) => void;
   setConvoGradientFrom: (v: string) => void;
   setConvoGradientTo: (v: string) => void;
@@ -296,6 +300,7 @@ export const useUIStore = create<UIState>()(
       echoChamberSide: "bottom-right" as EchoChamberSide,
       userStatusManual: "active" as const,
       userStatus: "active" as UserStatus,
+      centerCompact: false,
 
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -478,6 +483,7 @@ export const useUIStore = create<UIState>()(
       setChatFontOpacity: (v) => set({ chatFontOpacity: Math.max(0, Math.min(100, v)) }),
       setTextStrokeWidth: (v) => set({ textStrokeWidth: Math.max(0, Math.min(5, v)) }),
       setTextStrokeColor: (v) => set({ textStrokeColor: v }),
+      setCenterCompact: (v) => set({ centerCompact: v }),
       setVisualTheme: (v) => set({ visualTheme: v }),
       setConvoGradientFrom: (v) => set({ convoGradientFrom: v }),
       setConvoGradientTo: (v) => set({ convoGradientTo: v }),

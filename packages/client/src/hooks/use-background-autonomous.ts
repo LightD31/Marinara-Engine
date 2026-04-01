@@ -38,6 +38,7 @@ interface RawChat {
 interface RawCharacter {
   id: string;
   data?: string | { name?: string };
+  avatarPath?: string | null;
 }
 
 /**
@@ -164,12 +165,14 @@ export function useBackgroundAutonomousPolling() {
 
                 // Resolve character name for the notification
                 let charName = "Someone";
+                let charAvatar: string | null = null;
                 try {
                   // Find the triggering character's name
                   const charRow = await api.get<RawCharacter>(`/characters/${characterId}`);
                   if (charRow) {
                     const data = typeof charRow.data === "string" ? JSON.parse(charRow.data) : charRow.data;
                     if (data?.name) charName = data.name;
+                    charAvatar = charRow.avatarPath ?? null;
                   }
                 } catch {
                   /* use fallback name */
@@ -182,6 +185,9 @@ export function useBackgroundAutonomousPolling() {
 
                 // Increment unread badge
                 useChatStore.getState().incrementUnread(chat.id);
+
+                // Add floating avatar notification bubble
+                useChatStore.getState().addNotification(chat.id, charName, charAvatar);
 
                 // Show a global toast so the user knows even from a different chat
                 toast(`${charName} sent you a message`, { icon: "💬" });

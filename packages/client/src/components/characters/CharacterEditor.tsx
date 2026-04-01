@@ -346,9 +346,9 @@ export function CharacterEditor() {
       )}
 
       {/* ── Body: Tabs + Content ── */}
-      <div className="flex flex-1 overflow-hidden max-lg:flex-col">
+      <div className="flex flex-1 overflow-hidden @max-5xl:flex-col">
         {/* Tab Rail */}
-        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-2 max-lg:w-full max-lg:flex-row max-lg:overflow-x-auto max-lg:border-r-0 max-lg:border-b max-lg:p-1.5">
+        <nav className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] p-2 @max-5xl:w-full @max-5xl:flex-row @max-5xl:overflow-x-auto @max-5xl:border-r-0 @max-5xl:border-b @max-5xl:p-1.5">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             return (
@@ -356,7 +356,7 @@ export function CharacterEditor() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all text-left max-lg:whitespace-nowrap max-lg:px-2.5 max-lg:py-1.5",
+                  "flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all text-left @max-5xl:whitespace-nowrap @max-5xl:px-2.5 @max-5xl:py-1.5",
                   activeTab === tab.id
                     ? "bg-gradient-to-r from-pink-400/15 to-purple-500/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/20"
                     : "text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]",
@@ -370,7 +370,7 @@ export function CharacterEditor() {
         </nav>
 
         {/* Tab Content */}
-        <div className="flex-1 overflow-y-auto p-6 max-lg:p-4">
+        <div className="flex-1 overflow-y-auto p-6 @max-5xl:p-4">
           <div className="mx-auto max-w-2xl">
             {activeTab === "metadata" && (
               <MetadataTab

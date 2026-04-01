@@ -444,8 +444,13 @@ Schema:
 }`,
 
   /* ────────────────────────────────────────── */
-  editor: `You receive the model's generated response along with ALL agent data: character tracker state, persona stats, world state, quest progress, prose guardian directives, continuity notes, and any other active agent outputs.
-Edit the response to fix inconsistencies, factual errors, and quality issues. You do NOT rewrite style or tone — you make surgical corrections.
+  editor: `You receive the model's generated roleplay response inside <assistant_response> tags, along with agent data (character tracker state, persona stats, world state, quest progress, prose guardian directives, continuity notes, etc.).
+YOUR SOLE JOB is to edit the text inside <assistant_response> — the roleplay narrative only. Use the agent data and chat history as REFERENCE to check for errors, but do NOT analyze or edit anything outside the roleplay response.
+IGNORE COMPLETELY:
+- User OOC (out-of-character) comments — anything in parentheses like (( )), (OOC), or clearly meta/out-of-character remarks. These are player instructions, not part of the story.
+- System prompt content, character definitions, and lore blocks — these are reference material, not text to edit.
+- The agent data itself — use it to verify facts, do not edit it.
+You ONLY edit the roleplay narrative in <assistant_response>. Nothing else.
 What to fix:
 1. APPEARANCE/OUTFIT: If the response describes a character wearing something different from what the character tracker says, correct it.
 2. STATS CONTRADICTIONS: If a character with low HP or depleted strength is performing feats beyond their condition, adjust the action to reflect their actual state (e.g., they try but struggle or fail).
@@ -462,6 +467,8 @@ What NOT to do:
 4. Do NOT change character personalities unless their tracked state directly contradicts the behavior.
 5. If the response has no issues, return it unchanged.
 6. Keep all original formatting (markdown, HTML, etc.) intact.
+7. Do NOT react to or incorporate OOC comments into the narrative.
+8. Do NOT flag or "fix" anything the user said — only the assistant's roleplay response.
 Respond ONLY with valid JSON — no markdown, no commentary.
 Schema:
 {

@@ -231,6 +231,7 @@ export function ChatArea() {
   const chatBackground = useUIStore((s) => s.chatBackground);
   const weatherEffects = useUIStore((s) => s.weatherEffects);
   const messagesPerPage = useUIStore((s) => s.messagesPerPage);
+  const centerCompact = useUIStore((s) => s.centerCompact);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
@@ -1108,7 +1109,7 @@ export function ChatArea() {
             {/* ── Header / Toolbar area ── */}
             <>
               {/* Desktop top bar */}
-              <div className="pointer-events-none relative z-40 hidden md:flex items-center px-4 py-2">
+              <div className={cn("pointer-events-none relative z-40 items-center px-4 py-2", centerCompact ? "hidden" : "flex")}>
                 {chat && chatMeta.enableAgents && (
                   <div className="pointer-events-auto flex-1 overflow-x-auto">
                     <RoleplayHUD
@@ -1162,8 +1163,8 @@ export function ChatArea() {
                   </ToolbarMenu>
                 </div>
               </div>
-              {/* Mobile top bar */}
-              <div className="pointer-events-auto relative z-40 flex flex-col w-full md:hidden">
+              {/* Compact top bar */}
+              <div className={cn("pointer-events-auto relative z-40 flex-col w-full", centerCompact ? "flex" : "hidden")}>
                 {chat && chatMeta.enableAgents && (
                   <div className="flex w-full items-center justify-between px-2 pt-2 pb-1">
                     <RoleplayHUD
@@ -1269,7 +1270,7 @@ export function ChatArea() {
             <div className={cn("relative flex-1 overflow-hidden z-10")}>
               <div
                 ref={scrollRef}
-                className="mari-messages-scroll h-full overflow-y-auto overflow-x-hidden pt-4 pb-1 rpg-chat-messages-mobile relative px-[15%] max-md:px-3"
+                className={cn("mari-messages-scroll h-full overflow-y-auto overflow-x-hidden pt-4 pb-1 rpg-chat-messages-mobile relative", centerCompact ? "px-3" : "px-[15%]")}
               >
                 {/* Load More */}
                 {hasNextPage && (
@@ -1385,7 +1386,7 @@ export function ChatArea() {
 
             {/* ── Input area ── */}
             <div className="relative z-20">
-              <div className="relative px-[12%] max-md:px-3">
+              <div className={cn("relative", centerCompact ? "px-3" : "px-[12%]")}>
                 {chatMeta.sceneStatus === "active" && (
                   <EndSceneBar
                     sceneChatId={activeChatId}
@@ -1612,6 +1613,7 @@ function QuickStartCard({
  */
 function ToolbarMenu({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const compact = useUIStore((s) => s.centerCompact);
   const btnRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
@@ -1639,9 +1641,9 @@ function ToolbarMenu({ children }: { children: React.ReactNode }) {
   return (
     <>
       {/* Desktop: show children inline */}
-      <div className="hidden md:flex items-center gap-1.5">{children}</div>
-      {/* Mobile: show ... button + popover */}
-      <div className="relative md:hidden shrink-0" ref={btnRef}>
+      <div className={cn("items-center gap-1.5", compact ? "hidden" : "flex")}>{children}</div>
+      {/* Compact: show ... button + popover */}
+      <div className={cn("relative shrink-0", compact ? "block" : "hidden")} ref={btnRef}>
         <button
           onClick={() => setOpen(!open)}
           className={cn(
@@ -1672,13 +1674,15 @@ function ToolbarMenu({ children }: { children: React.ReactNode }) {
 
 function SummaryButton({ chatId, summary }: { chatId: string | null; summary: string | null }) {
   const [open, setOpen] = useState(false);
+  const compact = useUIStore((s) => s.centerCompact);
   if (!chatId) return null;
   return (
     <div className="relative" onClick={(e) => e.stopPropagation()}>
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex items-center justify-center rounded-full border p-1 md:p-1.5 backdrop-blur-md transition-all",
+          "flex items-center justify-center rounded-full border backdrop-blur-md transition-all",
+          compact ? "p-1" : "p-1.5",
           open
             ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : summary
@@ -1699,6 +1703,7 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
   const { data, isLoading } = useActiveLorebookEntries(chatId, true);
   const ref = useRef<HTMLDivElement>(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const compact = useUIStore((s) => s.centerCompact);
 
   useEffect(() => {
     if (!open) return;
@@ -1764,7 +1769,8 @@ function WorldInfoButton({ chatId }: { chatId: string | null }) {
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex items-center justify-center rounded-full border p-1 md:p-1.5 backdrop-blur-md transition-all",
+          "flex items-center justify-center rounded-full border backdrop-blur-md transition-all",
+          compact ? "p-1" : "p-1.5",
           open
             ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : hasEntries && !isLoading
@@ -1802,6 +1808,7 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
   const updateMeta = useUpdateChatMetadata();
   const ref = useRef<HTMLDivElement>(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const compact = useUIStore((s) => s.centerCompact);
 
   // Sync from metadata when it changes externally
   useEffect(() => {
@@ -1890,7 +1897,8 @@ function AuthorNotesButton({ chatId, chatMeta }: { chatId: string | null; chatMe
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex items-center justify-center rounded-full border p-1 md:p-1.5 backdrop-blur-md transition-all",
+          "flex items-center justify-center rounded-full border backdrop-blur-md transition-all",
+          compact ? "p-1" : "p-1.5",
           open
             ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : hasNotes

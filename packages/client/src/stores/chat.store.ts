@@ -65,6 +65,10 @@ interface ChatState {
   inputDrafts: Map<string, string>;
   /** Per-chat unread message count (from autonomous messages). */
   unreadCounts: Map<string, number>;
+  /** Floating notification bubbles — tracks character info for each unread chat. */
+  chatNotifications: Map<string, { chatId: string; characterName: string; avatarUrl: string | null; count: number }>;
+  /** Manually dismissed notification chatIds (won't re-appear until next message). */
+  dismissedNotifications: Set<string>;
 
   // Actions
   setActiveChat: (chat: Chat | null) => void;
@@ -93,6 +97,8 @@ interface ChatState {
   clearInputDraft: (chatId: string) => void;
   incrementUnread: (chatId: string) => void;
   clearUnread: (chatId: string) => void;
+  addNotification: (chatId: string, characterName: string, avatarUrl: string | null) => void;
+  dismissNotification: (chatId: string) => void;
   reset: () => void;
 }
 
@@ -123,6 +129,8 @@ export const useChatStore = create<ChatState>()(
     shouldOpenWizard: false,
     inputDrafts: loadDrafts(),
     unreadCounts: new Map(),
+    chatNotifications: new Map(),
+    dismissedNotifications: new Set(),
 
     setActiveChat: (chat) => set({ activeChat: chat }),
     setActiveChatId: (id) => {
@@ -130,10 +138,17 @@ export const useChatStore = create<ChatState>()(
       // Clear unread for the chat being opened
       if (id) {
         set((state) => {
-          if (!state.unreadCounts.has(id)) return {};
-          const m = new Map(state.unreadCounts);
-          m.delete(id);
-          return { unreadCounts: m };
+          const hasUnread = state.unreadCounts.has(id);
+          const hasNotif = state.chatNotifications.has(id);
+          const hasDismissed = state.dismissedNotifications.has(id);
+          if (!hasUnread && !hasNotif && !hasDismissed) return {};
+          const m = hasUnread ? new Map(state.unreadCounts) : state.unreadCounts;
+          if (hasUnread) m.delete(id);
+          const n = hasNotif ? new Map(state.chatNotifications) : state.chatNotifications;
+          if (hasNotif) n.delete(id);
+          const d = hasDismissed ? new Set(state.dismissedNotifications) : state.dismissedNotifications;
+          if (hasDismissed) d.delete(id);
+          return { unreadCounts: m, chatNotifications: n, dismissedNotifications: d };
         });
       }
       set({ activeChatId: id, swipeIndex: new Map(), ...(!id && { activeChat: null }) });
@@ -279,6 +294,29 @@ export const useChatStore = create<ChatState>()(
         m.delete(chatId);
         return { unreadCounts: m };
       }),
+    addNotification: (chatId, characterName, avatarUrl) =>
+      set((state) => {
+        // Don't add if this chat is currently active or was dismissed
+        if (state.activeChatId === chatId) return state;
+        if (state.dismissedNotifications.has(chatId)) return state;
+        const m = new Map(state.chatNotifications);
+        const existing = m.get(chatId);
+        m.set(chatId, {
+          chatId,
+          characterName,
+          avatarUrl,
+          count: (existing?.count ?? 0) + 1,
+        });
+        return { chatNotifications: m };
+      }),
+    dismissNotification: (chatId) =>
+      set((state) => {
+        const m = new Map(state.chatNotifications);
+        m.delete(chatId);
+        const d = new Set(state.dismissedNotifications);
+        d.add(chatId);
+        return { chatNotifications: m, dismissedNotifications: d };
+      }),
 
     setSwipeIndex: (messageId: string, index: number) =>
       set((state) => {
@@ -306,6 +344,8 @@ export const useChatStore = create<ChatState>()(
         swipeIndex: new Map(),
         inputDrafts: new Map(),
         unreadCounts: new Map(),
+        chatNotifications: new Map(),
+        dismissedNotifications: new Set(),
       });
       try {
         localStorage.removeItem(STORAGE_KEY);

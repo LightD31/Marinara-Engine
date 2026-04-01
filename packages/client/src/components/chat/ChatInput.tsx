@@ -2,7 +2,7 @@
 // Chat: Input — mode-aware styling
 // ──────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, memo } from "react";
-import { Send, Paperclip, StopCircle, X } from "lucide-react";
+import { Send, Paperclip, StopCircle, X, Smile } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient, useQuery, skipToken, type InfiniteData } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat.store";
@@ -18,6 +18,7 @@ import {
   type SlashCommandContext,
 } from "../../lib/slash-commands";
 import { cn } from "../../lib/utils";
+import { EmojiPicker } from "../ui/EmojiPicker";
 
 interface Attachment {
   type: string; // MIME type
@@ -39,7 +40,10 @@ export const ChatInput = memo(function ChatInput({ mode = "conversation", charac
   const [selectedCompletion, setSelectedCompletion] = useState(0);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const inputBarRef = useRef<HTMLDivElement>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeChatId = useChatStore((s) => s.activeChatId);
   const streamingChatId = useChatStore((s) => s.streamingChatId);
@@ -332,6 +336,18 @@ export const ChatInput = memo(function ChatInput({ mode = "conversation", charac
 
   const _isRP = mode === "roleplay";
 
+  const handleEmojiSelect = useCallback((emoji: string) => {
+    if (!textareaRef.current) return;
+    const el = textareaRef.current;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const value = el.value;
+    el.value = value.slice(0, start) + emoji + value.slice(end);
+    el.selectionStart = el.selectionEnd = start + emoji.length;
+    setHasInput(el.value.length > 0);
+    el.focus();
+  }, []);
+
   return (
     <div className="mari-chat-input chat-input-container px-3 pb-3">
       {/* Slash command autocomplete popup */}
@@ -402,6 +418,7 @@ export const ChatInput = memo(function ChatInput({ mode = "conversation", charac
 
       {/* Main input container */}
       <div
+        ref={inputBarRef}
         className={cn(
           "mari-chat-input-box relative flex items-center gap-1.5 rounded-2xl border-2 px-2.5 py-2.5 transition-all duration-200 sm:gap-2 sm:px-4",
           "bg-black/40",
@@ -443,6 +460,30 @@ export const ChatInput = memo(function ChatInput({ mode = "conversation", charac
           autoCorrect="on"
           className="mari-chat-input-textarea max-h-[12.5rem] min-w-0 flex-1 resize-none bg-transparent py-0 text-sm leading-normal text-[#c3c2c2] placeholder:text-foreground/30 outline-none disabled:cursor-not-allowed disabled:opacity-40"
         />
+
+        {/* Emoji picker */}
+        <div className="relative hidden sm:block">
+          <button
+            ref={emojiButtonRef}
+            onClick={() => setEmojiOpen((v) => !v)}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
+              emojiOpen
+                ? "text-foreground bg-foreground/10"
+                : "text-foreground/40 hover:bg-foreground/10 hover:text-foreground/70",
+            )}
+            title="Emoji"
+          >
+            <Smile size="1.125rem" />
+          </button>
+          <EmojiPicker
+            open={emojiOpen}
+            onClose={() => setEmojiOpen(false)}
+            onSelect={handleEmojiSelect}
+            anchorRef={emojiButtonRef}
+            containerRef={inputBarRef}
+          />
+        </div>
 
         {/* Send / Stop button */}
         <button
