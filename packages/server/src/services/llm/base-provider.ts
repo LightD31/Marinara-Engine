@@ -4,10 +4,12 @@
 import { Agent } from "undici";
 
 /**
- * Shared undici Agent with no body timeout — prevents "Body Timeout Error"
- * on long-running streaming LLM requests (default is 300s).
+ * Shared undici Agent with a 5-minute headers timeout (time to first byte)
+ * and no body timeout — prevents indefinite hangs while still allowing
+ * long-running streaming responses to complete.
  */
-const llmDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: 0 });
+const LLM_HEADERS_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const llmDispatcher = new Agent({ bodyTimeout: 0, headersTimeout: LLM_HEADERS_TIMEOUT });
 
 /**
  * Drop-in replacement for `fetch()` that uses a custom undici dispatcher

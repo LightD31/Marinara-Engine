@@ -94,8 +94,7 @@ export default defineConfig({
             runtimeCaching: [
               {
                 urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith("/api/"),
-                handler: "NetworkFirst",
-                options: { cacheName: "api-cache", expiration: { maxEntries: 50 } },
+                handler: "NetworkOnly",
               },
             ],
           },

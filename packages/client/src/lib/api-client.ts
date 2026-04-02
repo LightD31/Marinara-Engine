@@ -21,8 +21,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(`${BASE}${path}`, {
-    headers,
     ...init,
+    headers,
+    cache: "no-store",
   });
 
   if (!res.ok) {

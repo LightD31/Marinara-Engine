@@ -3,7 +3,15 @@
 // ──────────────────────────────────────────────
 import { eq, desc, and, lt, sql, count, inArray } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
-import { chats, messages, messageSwipes, chatImages, oocInfluences } from "../../db/schema/index.js";
+import {
+  chats,
+  messages,
+  messageSwipes,
+  chatImages,
+  oocInfluences,
+  agentRuns,
+  agentMemory,
+} from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import { existsSync, rmSync } from "fs";
 import { join } from "path";
@@ -82,6 +90,10 @@ export function createChatsStorage(db: DB) {
     },
 
     async remove(id: string) {
+      // Clean up agent data referencing this chat
+      await db.delete(agentRuns).where(eq(agentRuns.chatId, id));
+      await db.delete(agentMemory).where(eq(agentMemory.chatId, id));
+
       // Clean up gallery images (DB records + files on disk)
       await db.delete(chatImages).where(eq(chatImages.chatId, id));
       const galleryDir = join(GALLERY_DIR, id);
@@ -92,9 +104,11 @@ export function createChatsStorage(db: DB) {
 
     /** Delete all chats in a group (all branches). */
     async removeGroup(groupId: string) {
-      // Find all chat IDs in this group, then clean up their gallery data
+      // Find all chat IDs in this group, then clean up their data
       const groupChats = await db.select({ id: chats.id }).from(chats).where(eq(chats.groupId, groupId));
       for (const chat of groupChats) {
+        await db.delete(agentRuns).where(eq(agentRuns.chatId, chat.id));
+        await db.delete(agentMemory).where(eq(agentMemory.chatId, chat.id));
         await db.delete(chatImages).where(eq(chatImages.chatId, chat.id));
         const galleryDir = join(GALLERY_DIR, chat.id);
         if (existsSync(galleryDir)) rmSync(galleryDir, { recursive: true, force: true });

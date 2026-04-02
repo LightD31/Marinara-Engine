@@ -1803,11 +1803,22 @@ function AdvancedSettings() {
                 )}
               </button>
             ) : (
-              <div className="text-[0.625rem] text-[var(--muted-foreground)]">
-                To update, run:{" "}
-                <code className="rounded bg-[var(--background)] px-1 py-0.5 text-[0.625rem]">
-                  docker compose pull && docker compose up -d
-                </code>
+              <div className="flex flex-col gap-1.5">
+                <a
+                  href={updateCheck.data.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-all hover:opacity-90 active:scale-95"
+                >
+                  <Download size="0.8125rem" />
+                  Download v{updateCheck.data.latestVersion}
+                </a>
+                <span className="text-[0.625rem] text-[var(--muted-foreground)]">
+                  Docker users:{" "}
+                  <code className="rounded bg-[var(--background)] px-1 py-0.5">
+                    docker compose pull && docker compose up -d
+                  </code>
+                </span>
               </div>
             )}
           </div>

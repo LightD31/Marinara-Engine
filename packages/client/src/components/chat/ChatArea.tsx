@@ -369,7 +369,13 @@ export function ChatArea() {
     };
   }, [allPersonas, chat]);
 
-  const chatMode = (chat as unknown as { mode?: string })?.mode ?? "conversation";
+  // Remember the last known chat mode so that a transient `undefined` from
+  // React Query (cache invalidation, Suspense remount, concurrent batching)
+  // doesn't reset the layout from roleplay to conversation mid-session.
+  const lastModeRef = useRef<string>("conversation");
+  const rawMode = (chat as unknown as { mode?: string })?.mode;
+  if (rawMode) lastModeRef.current = rawMode;
+  const chatMode = rawMode ?? lastModeRef.current;
   const isRoleplay = chatMode === "roleplay" || chatMode === "visual_novel";
   const { startEncounter } = useEncounter();
   const { concludeScene, abandonScene } = useScene();

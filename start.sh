@@ -67,6 +67,19 @@ if [ -d ".git" ]; then
     fi
 fi
 
+# ── Detect stale dist (source updated but dist not rebuilt) ──
+if [ -f "packages/shared/dist/constants/defaults.js" ]; then
+    SOURCE_VER=$(node -p "require('./package.json').version" 2>/dev/null || true)
+    DIST_VER=$(node -e "try{const m=require('./packages/shared/dist/constants/defaults.js');console.log(m.APP_VERSION)}catch{}" 2>/dev/null || true)
+    if [ -n "$SOURCE_VER" ] && [ -n "$DIST_VER" ] && [ "$SOURCE_VER" != "$DIST_VER" ]; then
+        echo "  [WARN] Version mismatch: source v$SOURCE_VER but dist has v$DIST_VER"
+        echo "  [..] Forcing rebuild to apply update..."
+        pnpm install
+        rm -rf packages/shared/dist packages/server/dist packages/client/dist
+        rm -f packages/shared/tsconfig.tsbuildinfo packages/server/tsconfig.tsbuildinfo packages/client/tsconfig.tsbuildinfo
+    fi
+fi
+
 # ── Install dependencies ──
 if [ ! -d "node_modules" ]; then
     echo ""

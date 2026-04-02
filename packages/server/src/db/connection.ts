@@ -18,6 +18,7 @@ async function createWithLibsql(dbPath: string): Promise<DrizzleDB> {
   await client.execute("PRAGMA journal_mode=WAL");
   await client.execute("PRAGMA synchronous=NORMAL");
   await client.execute("PRAGMA busy_timeout=5000");
+  await client.execute("PRAGMA foreign_keys=ON");
 
   return drizzle(client, { schema });
 }
@@ -30,6 +31,7 @@ async function createWithBetterSqlite3(dbPath: string): Promise<DrizzleDB> {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("synchronous = NORMAL");
   sqlite.pragma("busy_timeout = 5000");
+  sqlite.pragma("foreign_keys = ON");
 
   // Cast is safe — both Drizzle SQLite drivers share the same query API
   return drizzle(sqlite, { schema }) as unknown as DrizzleDB;
@@ -53,6 +55,7 @@ async function createWithSqlJs(dbPath: string): Promise<DrizzleDB> {
   sqlDb.run("PRAGMA journal_mode = WAL");
   sqlDb.run("PRAGMA synchronous = NORMAL");
   sqlDb.run("PRAGMA busy_timeout = 5000");
+  sqlDb.run("PRAGMA foreign_keys = ON");
 
   // Persist to disk periodically and on process exit
   const save = () => {

@@ -714,37 +714,48 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         // Summarize each unsummarized past day (in parallel for speed)
+        // Wrapped with a 5-minute timeout so a slow provider can't block the main generation.
+        const SUMMARY_TIMEOUT = 300_000;
+        const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+          Promise.race([
+            promise,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Summary timeout")), ms)),
+          ]);
+
         if (bucketsToSummarize.length > 0) {
           const summaryProvider = createLLMProvider(conn.provider, baseUrl, conn.apiKey);
           const summaryResults = await Promise.allSettled(
             bucketsToSummarize.map(async (bucket) => {
               const chatLog = bucket.msgs.map((m) => `${m.author}: ${m.content}`).join("\n");
-              const result = await summaryProvider.chatComplete(
-                [
-                  {
-                    role: "system" as const,
-                    content: [
-                      `You are a conversation memory assistant. You will receive a full day's DM conversation from ${bucket.date}.`,
-                      `Produce a JSON object with two fields:`,
-                      ``,
-                      `1. "summary" — A brief narrative paragraph (2-4 sentences, third person) covering what happened: topics discussed, key moments, emotional tone, and important exchanges.`,
-                      ``,
-                      `2. "keyDetails" — An array of short, specific strings listing things the characters MUST remember going forward. Include:`,
-                      `   - Promises or commitments made ("Alice promised to call Bob tomorrow morning")`,
-                      `   - Plans or appointments ("They agreed to watch a movie together on Friday")`,
-                      `   - Unresolved questions or topics left hanging ("Bob asked about Alice's job interview — she said she'd tell him later")`,
-                      `   - Emotional events that would affect future interactions ("Alice confided she's been feeling lonely lately")`,
-                      `   - New information revealed ("Bob mentioned he has a sister named Clara")`,
-                      `   - Requests or things someone said they'd do ("Alice said she'd send the recipe")`,
-                      `   If nothing important needs to be carried forward, use an empty array.`,
-                      ``,
-                      `Respond with ONLY valid JSON. No markdown fences, no extra text.`,
-                      `Example: { "summary": "Alice and Bob caught up after work...", "keyDetails": ["Alice promised to send Bob the recipe for pasta", "They planned to meet for coffee on Saturday"] }`,
-                    ].join("\n"),
-                  },
-                  { role: "user" as const, content: chatLog },
-                ],
-                { model: conn.model, temperature: 0.3, maxTokens: 4096 },
+              const result = await withTimeout(
+                summaryProvider.chatComplete(
+                  [
+                    {
+                      role: "system" as const,
+                      content: [
+                        `You are a conversation memory assistant. You will receive a full day's DM conversation from ${bucket.date}.`,
+                        `Produce a JSON object with two fields:`,
+                        ``,
+                        `1. "summary" — A brief narrative paragraph (2-4 sentences, third person) covering what happened: topics discussed, key moments, emotional tone, and important exchanges.`,
+                        ``,
+                        `2. "keyDetails" — An array of short, specific strings listing things the characters MUST remember going forward. Include:`,
+                        `   - Promises or commitments made ("Alice promised to call Bob tomorrow morning")`,
+                        `   - Plans or appointments ("They agreed to watch a movie together on Friday")`,
+                        `   - Unresolved questions or topics left hanging ("Bob asked about Alice's job interview — she said she'd tell him later")`,
+                        `   - Emotional events that would affect future interactions ("Alice confided she's been feeling lonely lately")`,
+                        `   - New information revealed ("Bob mentioned he has a sister named Clara")`,
+                        `   - Requests or things someone said they'd do ("Alice said she'd send the recipe")`,
+                        `   If nothing important needs to be carried forward, use an empty array.`,
+                        ``,
+                        `Respond with ONLY valid JSON. No markdown fences, no extra text.`,
+                        `Example: { "summary": "Alice and Bob caught up after work...", "keyDetails": ["Alice promised to send Bob the recipe for pasta", "They planned to meet for coffee on Saturday"] }`,
+                      ].join("\n"),
+                    },
+                    { role: "user" as const, content: chatLog },
+                  ],
+                  { model: conn.model, temperature: 0.3, maxTokens: 4096 },
+                ),
+                SUMMARY_TIMEOUT,
               );
               const raw = (result.content ?? "").trim();
               // Parse the JSON response
@@ -841,28 +852,31 @@ export async function generateRoutes(app: FastifyInstance) {
                 return block;
               });
 
-              const result = await weekProvider.chatComplete(
-                [
-                  {
-                    role: "system" as const,
-                    content: [
-                      `You are a conversation memory assistant. You will receive daily conversation summaries for the week of ${rangeLabel}.`,
-                      `Produce a JSON object with two fields:`,
-                      ``,
-                      `1. "summary" — A cohesive narrative paragraph (3-6 sentences, third person) covering the week: major topics, relationship developments, emotional arc, and significant events. Weave the days together naturally — don't just list each day separately.`,
-                      ``,
-                      `2. "keyDetails" — A consolidated array of short, specific strings listing things the characters MUST still remember going forward. Review the daily key details and:`,
-                      `   - KEEP details that are still relevant (upcoming plans, ongoing commitments, unresolved topics)`,
-                      `   - MERGE duplicates or evolving items into their latest state`,
-                      `   - DROP details that were already resolved during the week (e.g. "promised to send recipe" if it was sent later that week)`,
-                      `   - ADD any overarching patterns or relationship developments worth remembering`,
-                      ``,
-                      `Respond with ONLY valid JSON. No markdown fences, no extra text.`,
-                    ].join("\n"),
-                  },
-                  { role: "user" as const, content: dayBlocks.join("\n\n") },
-                ],
-                { model: conn.model, temperature: 0.3, maxTokens: 4096 },
+              const result = await withTimeout(
+                weekProvider.chatComplete(
+                  [
+                    {
+                      role: "system" as const,
+                      content: [
+                        `You are a conversation memory assistant. You will receive daily conversation summaries for the week of ${rangeLabel}.`,
+                        `Produce a JSON object with two fields:`,
+                        ``,
+                        `1. "summary" — A cohesive narrative paragraph (3-6 sentences, third person) covering the week: major topics, relationship developments, emotional arc, and significant events. Weave the days together naturally — don't just list each day separately.`,
+                        ``,
+                        `2. "keyDetails" — A consolidated array of short, specific strings listing things the characters MUST still remember going forward. Review the daily key details and:`,
+                        `   - KEEP details that are still relevant (upcoming plans, ongoing commitments, unresolved topics)`,
+                        `   - MERGE duplicates or evolving items into their latest state`,
+                        `   - DROP details that were already resolved during the week (e.g. "promised to send recipe" if it was sent later that week)`,
+                        `   - ADD any overarching patterns or relationship developments worth remembering`,
+                        ``,
+                        `Respond with ONLY valid JSON. No markdown fences, no extra text.`,
+                      ].join("\n"),
+                    },
+                    { role: "user" as const, content: dayBlocks.join("\n\n") },
+                  ],
+                  { model: conn.model, temperature: 0.3, maxTokens: 4096 },
+                ),
+                SUMMARY_TIMEOUT,
               );
               const raw = (result.content ?? "").trim();
               try {
@@ -957,7 +971,7 @@ export async function generateRoutes(app: FastifyInstance) {
               }
               return [
                 {
-                  role: "user" as const,
+                  role: "system" as const,
                   content: `<summary week="${weekKey} – ${fmtDateKey(sunday)}">\n${block}\n</summary>`,
                 },
               ];
@@ -972,7 +986,7 @@ export async function generateRoutes(app: FastifyInstance) {
               }
               return [
                 {
-                  role: "user" as const,
+                  role: "system" as const,
                   content: `<summary date="${bucket.date}">\n${block}\n</summary>`,
                 },
               ];

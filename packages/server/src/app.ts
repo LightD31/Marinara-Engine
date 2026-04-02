@@ -65,6 +65,18 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── IP Allowlist ──
   app.addHook("onRequest", ipAllowlistHook);
 
+  // ── Prevent caching of API JSON responses ──
+  // Without explicit Cache-Control, browsers apply heuristic caching which
+  // can return stale data when React Query refetches after mutations.
+  // This caused messages to vanish after generation because the refetch
+  // returned a cached response without the newly saved message.
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (req.url.startsWith("/api/") && !reply.hasHeader("Cache-Control")) {
+      reply.header("Cache-Control", "no-store");
+    }
+    return payload;
+  });
+
   // ── Error Handler ──
   app.setErrorHandler(errorHandler);
 

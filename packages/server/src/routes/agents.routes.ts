@@ -29,8 +29,13 @@ export async function agentsRoutes(app: FastifyInstance) {
   });
 
   app.delete<{ Params: { id: string } }>("/:id", async (req, reply) => {
-    await storage.remove(req.params.id);
-    return reply.status(204).send();
+    try {
+      await storage.remove(req.params.id);
+      return reply.status(204).send();
+    } catch (err) {
+      req.log.error(err, "Failed to delete agent %s", req.params.id);
+      return reply.status(500).send({ error: "Failed to delete agent. Try restarting the server and retrying." });
+    }
   });
 
   /** Toggle a built-in agent by type. Creates config if first toggle. */

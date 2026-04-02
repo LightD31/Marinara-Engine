@@ -688,7 +688,12 @@ export function useGenerate() {
             }
 
             case "cross_post": {
-              const cpData = event.data as { targetChatId: string; targetChatName: string; sourceChatId: string; characterId: string };
+              const cpData = event.data as {
+                targetChatId: string;
+                targetChatName: string;
+                sourceChatId: string;
+                characterId: string;
+              };
               toast(`Message redirected to ${cpData.targetChatName}`, { icon: "↗️" });
               // Invalidate both chats: target got a new message, source had it removed
               qc.invalidateQueries({ queryKey: ["chats", "messages", cpData.targetChatId] });
@@ -942,9 +947,11 @@ export function useGenerate() {
           // Only clear global streaming/UI state if this chat is still the one
           // being displayed, to avoid corrupting another chat's active generation.
           if (useChatStore.getState().streamingChatId === params.chatId) {
-            // Wait one frame so React renders the fetched messages before
-            // removing the streaming overlay — prevents a visible flash.
-            await new Promise<void>((r) => requestAnimationFrame(() => r()));
+            // Wait two frames so React commits the refetched messages before
+            // removing the streaming overlay — a single rAF can race with
+            // React 19's render scheduling, causing a flash where neither the
+            // stream buffer nor the real message is visible.
+            await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
             setStreaming(false);
             clearStreamBuffer();
           }

@@ -77,6 +77,23 @@ echo  [OK] Node.js found:
 node -v
 echo  [OK] pnpm %PNPM_VERSION% ready
 
+:: Detect stale dist (source updated but dist not rebuilt)
+if not exist "packages\shared\dist\constants\defaults.js" goto :skip_version_check
+for /f "usebackq delims=" %%i in (`node -p "require('./package.json').version" 2^>nul`) do set "SOURCE_VER=%%i"
+for /f "usebackq delims=" %%i in (`node -e "try{const m=require('./packages/shared/dist/constants/defaults.js');console.log(m.APP_VERSION)}catch{}" 2^>nul`) do set "DIST_VER=%%i"
+if not "!SOURCE_VER!"=="" if not "!DIST_VER!"=="" if not "!SOURCE_VER!"=="!DIST_VER!" (
+    echo  [WARN] Version mismatch: source v!SOURCE_VER! but dist has v!DIST_VER!
+    echo  [..] Forcing rebuild to apply update...
+    call pnpm install
+    if exist "packages\shared\dist" rmdir /s /q "packages\shared\dist"
+    if exist "packages\server\dist" rmdir /s /q "packages\server\dist"
+    if exist "packages\client\dist" rmdir /s /q "packages\client\dist"
+    del /q "packages\shared\tsconfig.tsbuildinfo" 2>nul
+    del /q "packages\server\tsconfig.tsbuildinfo" 2>nul
+    del /q "packages\client\tsconfig.tsbuildinfo" 2>nul
+)
+:skip_version_check
+
 :: Install dependencies if needed
 if exist "node_modules" goto :skip_install
 echo.

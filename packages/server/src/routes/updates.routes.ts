@@ -140,32 +140,50 @@ export async function updatesRoutes(app: FastifyInstance) {
         timeout: 60_000,
       });
 
-      if (pullOut.includes("Already up to date")) {
-        return { status: "already_up_to_date", message: "Already on the latest version." };
+      const alreadyUpToDate = pullOut.includes("Already up to date");
+
+      // Even if git says "already up to date", the dist might be stale
+      // (e.g. a previous update pulled code but failed to build).
+      // Compare package.json version with the running APP_VERSION.
+      if (alreadyUpToDate) {
+        const { readFileSync } = await import("fs");
+        try {
+          const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf-8"));
+          const sourceVersion = pkg.version as string;
+          if (sourceVersion === APP_VERSION) {
+            return { status: "already_up_to_date", message: "Already on the latest version." };
+          }
+          // Source has a newer version than running dist — need to rebuild
+        } catch {
+          return { status: "already_up_to_date", message: "Already on the latest version." };
+        }
       }
 
       // Step 2: pnpm install
+      // shell: true is required on Windows where pnpm is a .cmd file
       await execFileAsync("pnpm", ["install", "--frozen-lockfile"], {
         cwd: root,
         timeout: 120_000,
+        shell: true,
       });
 
       // Step 3: Rebuild all packages
       await execFileAsync("pnpm", ["build"], {
         cwd: root,
         timeout: 300_000,
+        shell: true,
       });
 
-      // Step 4: Signal restart — exit with code 0 so the start script re-launches.
+      // Step 4: Signal exit so the user can relaunch with the new version.
       // Send response first, then schedule exit.
       const result = {
         status: "updated",
-        message: "Update applied successfully. The server will restart momentarily.",
+        message: "Update applied successfully. Please relaunch the app to use the new version.",
       };
 
       // Give Fastify time to flush the response, then exit
       setTimeout(() => {
-        console.log("[Update] Restarting server after update...");
+        console.log("[Update] Shutting down after update...");
         process.exit(0);
       }, 500);
 
