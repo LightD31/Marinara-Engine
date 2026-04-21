@@ -13,19 +13,8 @@ import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
 import { useSidecarStore } from "../../stores/sidecar.store";
 import { BUILT_IN_AGENTS, LOCAL_SIDECAR_CONNECTION_ID, getDefaultAgentPrompt } from "@marinara-engine/shared";
-import {
-  Plus,
-  Trash2,
-  Link,
-  Check,
-  Shuffle,
-  ExternalLink,
-  X,
-  Copy,
-  BrainCircuit,
-  Download,
-  Trash,
-} from "lucide-react";
+import { showConfirmDialog } from "../../lib/app-dialogs";
+import { Plus, Trash2, Link, Check, Shuffle, ExternalLink, X, Copy, BrainCircuit, Download, Trash } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { toast } from "sonner";
 
@@ -444,9 +433,18 @@ export function ConnectionsPanel() {
                   <Copy size="0.75rem" />
                 </button>
                 <button
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (!confirm(`Delete "${conn.name}"? This cannot be undone.`)) return;
+                    if (
+                      !(await showConfirmDialog({
+                        title: "Delete Connection",
+                        message: `Delete "${conn.name}"? This cannot be undone.`,
+                        confirmLabel: "Delete",
+                        tone: "destructive",
+                      }))
+                    ) {
+                      return;
+                    }
                     deleteConnection.mutate(conn.id);
                   }}
                   className="rounded-lg p-1.5 transition-all hover:bg-[var(--destructive)]/15 active:scale-90"

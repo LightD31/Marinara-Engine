@@ -118,7 +118,9 @@ class SidecarProcessService {
         mlxRuntimeService.resetRuntime();
       } else {
         if (sidecarRuntimeService.getStatus().source === "system") {
-          throw new Error("The local runtime is using a system llama-server from PATH. Reinstall that runtime outside Marinara.");
+          throw new Error(
+            "The local runtime is using a system llama-server from PATH. Reinstall that runtime outside Marinara.",
+          );
         }
         sidecarRuntimeService.resetRuntime();
       }
@@ -408,12 +410,11 @@ class SidecarProcessService {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error("The local sidecar server failed to start");
 
-        const nextRuntime: ManagedRuntimeInstall | null =
-          this.usesGpuRuntime(activeRuntime)
-            ? await this.ensureRuntimeInstalled("llama_cpp", {
-                excludeVariants: [...attemptedVariants],
-              }).catch(() => null)
-            : null;
+        const nextRuntime: ManagedRuntimeInstall | null = this.usesGpuRuntime(activeRuntime)
+          ? await this.ensureRuntimeInstalled("llama_cpp", {
+              excludeVariants: [...attemptedVariants],
+            }).catch(() => null)
+          : null;
 
         if (nextRuntime && !this.isMlxRuntime(nextRuntime) && !attemptedVariants.has(nextRuntime.variant)) {
           console.warn(
@@ -472,7 +473,9 @@ class SidecarProcessService {
 
         const nextPlan = startupPlans[attempt + 1];
         if (nextPlan && this.shouldRetryStartup(error)) {
-          console.warn(`[sidecar] Startup with ${plan.label} failed (${error.message}). Retrying with ${nextPlan.label}.`);
+          console.warn(
+            `[sidecar] Startup with ${plan.label} failed (${error.message}). Retrying with ${nextPlan.label}.`,
+          );
           continue;
         }
 
@@ -634,7 +637,9 @@ class SidecarProcessService {
       return;
     }
 
-    console.error(`[sidecar] Local sidecar server exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`);
+    console.error(
+      `[sidecar] Local sidecar server exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+    );
 
     if (this.starting) {
       return;

@@ -218,7 +218,9 @@ class SidecarRuntimeService {
       preferVulkan:
         current?.preferVulkan ??
         (process.platform === "linux"
-          ? ["/usr/lib/libvulkan.so", "/usr/lib64/libvulkan.so", "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"].some((path) => existsSync(path))
+          ? ["/usr/lib/libvulkan.so", "/usr/lib64/libvulkan.so", "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"].some(
+              (path) => existsSync(path),
+            )
           : false),
       systemLlamaPath: current?.systemLlamaPath ?? null,
       launchCommand: current?.launchCommand ?? null,
@@ -338,9 +340,7 @@ class SidecarRuntimeService {
       }
 
       const isBundledArtifact =
-        /^llama-/i.test(entry.name) ||
-        /\.(extract|zip)$/i.test(entry.name) ||
-        entry.name.endsWith(".tar.gz");
+        /^llama-/i.test(entry.name) || /\.(extract|zip)$/i.test(entry.name) || entry.name.endsWith(".tar.gz");
       if (isBundledArtifact || entry.isDirectory()) {
         rmSync(fullPath, { recursive: true, force: true });
       }
@@ -376,7 +376,9 @@ class SidecarRuntimeService {
 
       const match = await this.selectBestAsset(release.assets, excludedVariants);
       if (!match) {
-        throw new Error(`Your platform (${process.platform}/${process.arch}) is not supported for local inference yet.`);
+        throw new Error(
+          `Your platform (${process.platform}/${process.arch}) is not supported for local inference yet.`,
+        );
       }
 
       const directoryName = `${release.tag_name}-${match.variant}`;
@@ -527,7 +529,9 @@ class SidecarRuntimeService {
     const preferCuda = arch === "x64" && hasNvidia;
     const preferHip = platform === "win32" && arch === "x64" && hasAmd;
     const preferRocm =
-      platform === "linux" && arch === "x64" && (hasAmd || (await commandSucceeds("rocm-smi")) || existsSync("/opt/rocm"));
+      platform === "linux" &&
+      arch === "x64" &&
+      (hasAmd || (await commandSucceeds("rocm-smi")) || existsSync("/opt/rocm"));
     const preferSycl = platform === "win32" && arch === "x64" && hasIntel;
     const preferVulkan = await this.detectVulkanSupport(platform);
     const systemLlamaPath = await this.detectSystemLlamaPath();
@@ -650,9 +654,7 @@ class SidecarRuntimeService {
             ["where", "llama-server.exe"],
             ["where", "llama-server"],
           ]
-        : [
-            ["which", "llama-server"],
-          ];
+        : [["which", "llama-server"]];
 
     for (const [command, target] of candidates) {
       try {
@@ -673,13 +675,19 @@ class SidecarRuntimeService {
   }
 
   private shouldUseSystemRuntime(): boolean {
-    return parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA) ||
-      parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA_SERVER);
+    return (
+      parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA) ||
+      parseBooleanEnv(process.env.MARINARA_SIDECAR_USE_SYSTEM_LLAMA_SERVER)
+    );
   }
 
   private createSystemInstall(systemPath: string, capabilities: RuntimeCapabilities | null): SidecarRuntimeInstall {
     const gpuCapable = capabilities
-      ? capabilities.preferCuda || capabilities.preferHip || capabilities.preferRocm || capabilities.preferSycl || capabilities.preferVulkan
+      ? capabilities.preferCuda ||
+        capabilities.preferHip ||
+        capabilities.preferRocm ||
+        capabilities.preferSycl ||
+        capabilities.preferVulkan
       : false;
 
     return {
@@ -710,20 +718,21 @@ class SidecarRuntimeService {
       return null;
     }
 
-    const capabilities: RuntimeCapabilities | null =
-      this.diagnosticsCache?.value
-        ? {
-            platform: process.platform,
-            arch: process.arch,
-            gpuVendors: diagnostics.gpuVendors.filter((vendor): vendor is GpuVendor => vendor === "nvidia" || vendor === "amd" || vendor === "intel"),
-            preferCuda: diagnostics.preferCuda,
-            preferHip: diagnostics.preferHip,
-            preferRocm: diagnostics.preferRocm,
-            preferSycl: diagnostics.preferSycl,
-            preferVulkan: diagnostics.preferVulkan,
-            systemLlamaPath: diagnostics.systemLlamaPath,
-          }
-        : null;
+    const capabilities: RuntimeCapabilities | null = this.diagnosticsCache?.value
+      ? {
+          platform: process.platform,
+          arch: process.arch,
+          gpuVendors: diagnostics.gpuVendors.filter(
+            (vendor): vendor is GpuVendor => vendor === "nvidia" || vendor === "amd" || vendor === "intel",
+          ),
+          preferCuda: diagnostics.preferCuda,
+          preferHip: diagnostics.preferHip,
+          preferRocm: diagnostics.preferRocm,
+          preferSycl: diagnostics.preferSycl,
+          preferVulkan: diagnostics.preferVulkan,
+          systemLlamaPath: diagnostics.systemLlamaPath,
+        }
+      : null;
     return this.createSystemInstall(systemPath, capabilities);
   }
 
@@ -760,7 +769,12 @@ class SidecarRuntimeService {
     const matches: RuntimeMatch[] = [];
 
     if (capabilities.platform === "android" && capabilities.arch === "arm64") {
-      this.pushCandidate(matches, excludedVariants, "android-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-android-arm64\.tar\.gz$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "android-arm64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-android-arm64\.tar\.gz$/i),
+      );
     } else if (capabilities.platform === "darwin" && capabilities.arch === "arm64") {
       this.pushCandidate(
         matches,
@@ -770,7 +784,12 @@ class SidecarRuntimeService {
           this.findFirstAsset(assets, /^llama-.*-bin-macos-arm64-kleidiai\.tar\.gz$/i),
       );
     } else if (capabilities.platform === "darwin" && capabilities.arch === "x64") {
-      this.pushCandidate(matches, excludedVariants, "macos-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-macos-x64\.tar\.gz$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "macos-x64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-macos-x64\.tar\.gz$/i),
+      );
     } else if (capabilities.platform === "win32" && capabilities.arch === "x64") {
       if (capabilities.preferCuda) {
         this.pushCandidate(
@@ -783,17 +802,42 @@ class SidecarRuntimeService {
         );
       }
       if (capabilities.preferHip) {
-        this.pushCandidate(matches, excludedVariants, "win-x64-hip", this.findFirstAsset(assets, /^llama-.*-bin-win-hip-x64\.zip$/i));
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "win-x64-hip",
+          this.findFirstAsset(assets, /^llama-.*-bin-win-hip-x64\.zip$/i),
+        );
       }
       if (capabilities.preferSycl) {
-        this.pushCandidate(matches, excludedVariants, "win-x64-sycl", this.findFirstAsset(assets, /^llama-.*-bin-win-sycl-x64\.zip$/i));
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "win-x64-sycl",
+          this.findFirstAsset(assets, /^llama-.*-bin-win-sycl-x64\.zip$/i),
+        );
       }
       if (capabilities.preferVulkan) {
-        this.pushCandidate(matches, excludedVariants, "win-x64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-win-vulkan-x64\.zip$/i));
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "win-x64-vulkan",
+          this.findFirstAsset(assets, /^llama-.*-bin-win-vulkan-x64\.zip$/i),
+        );
       }
-      this.pushCandidate(matches, excludedVariants, "win-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-x64\.zip$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "win-x64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-x64\.zip$/i),
+      );
     } else if (capabilities.platform === "win32" && capabilities.arch === "arm64") {
-      this.pushCandidate(matches, excludedVariants, "win-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-arm64\.zip$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "win-arm64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-win-cpu-arm64\.zip$/i),
+      );
     } else if (capabilities.platform === "linux" && capabilities.arch === "x64") {
       if (capabilities.preferCuda) {
         this.pushCandidate(
@@ -812,14 +856,34 @@ class SidecarRuntimeService {
         );
       }
       if (capabilities.preferVulkan) {
-        this.pushCandidate(matches, excludedVariants, "linux-x64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$/i));
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "linux-x64-vulkan",
+          this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$/i),
+        );
       }
-      this.pushCandidate(matches, excludedVariants, "linux-x64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-x64\.tar\.gz$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "linux-x64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-x64\.tar\.gz$/i),
+      );
     } else if (capabilities.platform === "linux" && capabilities.arch === "arm64") {
       if (capabilities.preferVulkan) {
-        this.pushCandidate(matches, excludedVariants, "linux-arm64-vulkan", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-arm64\.tar\.gz$/i));
+        this.pushCandidate(
+          matches,
+          excludedVariants,
+          "linux-arm64-vulkan",
+          this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-vulkan-arm64\.tar\.gz$/i),
+        );
       }
-      this.pushCandidate(matches, excludedVariants, "linux-arm64-cpu", this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-arm64\.tar\.gz$/i));
+      this.pushCandidate(
+        matches,
+        excludedVariants,
+        "linux-arm64-cpu",
+        this.findFirstAsset(assets, /^llama-.*-bin-ubuntu-arm64\.tar\.gz$/i),
+      );
     }
 
     return matches[0] ?? null;

@@ -43,8 +43,12 @@ function formatRuntimeVariantLabel(variant: string | null): string | null {
 function ResponseBlock({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="mb-1 text-[0.6875rem] font-medium uppercase tracking-wider text-[var(--muted-foreground)]/60">{label}</div>
-      <div className="rounded-lg bg-[var(--secondary)] p-3 text-sm leading-relaxed text-[var(--foreground)]">{value}</div>
+      <div className="mb-1 text-[0.6875rem] font-medium uppercase tracking-wider text-[var(--muted-foreground)]/60">
+        {label}
+      </div>
+      <div className="rounded-lg bg-[var(--secondary)] p-3 text-sm leading-relaxed text-[var(--foreground)]">
+        {value}
+      </div>
     </div>
   );
 }
@@ -93,18 +97,17 @@ export function ModelDownloadModal({ open, onClose }: Props) {
   const activeBackend = runtime.backend ?? config.backend;
   const isSystemRuntime = runtime.source === "system";
   const canReinstallRuntime = !isSystemRuntime;
-  const selectedPreset = curatedModels.find((model) => model.quantization === selectedQuant) ?? curatedModels[0] ?? null;
-  const selectedCustomEntry = customModels.find((entry) => entry.path === selectedCustomPath) ?? customModels[0] ?? null;
+  const selectedPreset =
+    curatedModels.find((model) => model.quantization === selectedQuant) ?? curatedModels[0] ?? null;
+  const selectedCustomEntry =
+    customModels.find((entry) => entry.path === selectedCustomPath) ?? customModels[0] ?? null;
   const isCustomRepoValidated = selectedCustomEntry?.path === repoInput.trim();
   const isDownloading = downloadProgress?.status === "downloading";
   const hasModel = modelDownloaded;
   const activeModelName = hasModel ? modelDisplayName : null;
   const shouldAutoStart = config.useForTrackers || config.useForGameScene;
   const isPreparingServer =
-    hasModel &&
-    shouldAutoStart &&
-    !inferenceReady &&
-    (status === "starting_server" || status === "downloaded");
+    hasModel && shouldAutoStart && !inferenceReady && (status === "starting_server" || status === "downloaded");
   const isSetupBusy = isDownloading || status === "downloading_runtime" || isPreparingServer;
   const canFinish = status === "ready" && inferenceReady;
 
@@ -143,7 +146,7 @@ export function ModelDownloadModal({ open, onClose }: Props) {
         : `Downloading local runtime${progress.label ? ` (${progress.label})` : ""}...`
       : progress?.phase === "model"
         ? `Downloading model${progress.label ? ` (${progress.label})` : ""}...`
-      : isPreparingServer
+        : isPreparingServer
           ? "Starting local runtime..."
           : "Setting up local runtime...";
   const setupDescription =
@@ -271,7 +274,11 @@ export function ModelDownloadModal({ open, onClose }: Props) {
                 disabled={!hasModel || testMessagePending}
                 className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {testMessagePending ? <Loader2 size="0.875rem" className="animate-spin" /> : <MessageSquare size="0.875rem" />}
+                {testMessagePending ? (
+                  <Loader2 size="0.875rem" className="animate-spin" />
+                ) : (
+                  <MessageSquare size="0.875rem" />
+                )}
                 Send Test Message
               </button>
               {!hasModel && (
@@ -286,9 +293,7 @@ export function ModelDownloadModal({ open, onClose }: Props) {
         {testMessageResult && (
           <div
             className={`rounded-xl border p-4 ${
-              testMessageResult.success
-                ? "border-emerald-500/25 bg-emerald-500/5"
-                : "border-red-500/25 bg-red-500/5"
+              testMessageResult.success ? "border-emerald-500/25 bg-emerald-500/5" : "border-red-500/25 bg-red-500/5"
             }`}
           >
             <div className={`text-sm font-medium ${testMessageResult.success ? "text-emerald-300" : "text-red-300"}`}>
@@ -299,7 +304,8 @@ export function ModelDownloadModal({ open, onClose }: Props) {
               <div className="mt-3 flex flex-col gap-3">
                 {testMessageResult.nonce && (
                   <div className="text-xs text-[var(--muted-foreground)]/75">
-                    Verification token: <span className="font-mono text-[var(--foreground)]">{testMessageResult.nonce}</span>
+                    Verification token:{" "}
+                    <span className="font-mono text-[var(--foreground)]">{testMessageResult.nonce}</span>
                     {testMessageResult.nonceVerified ? " • echoed by model" : " • not echoed"}
                   </div>
                 )}
@@ -308,18 +314,22 @@ export function ModelDownloadModal({ open, onClose }: Props) {
                     {testMessageResult.usage && (
                       <span>
                         Usage: prompt {testMessageResult.usage.promptTokens ?? "?"}, completion{" "}
-                        {testMessageResult.usage.completionTokens ?? "?"}, total {testMessageResult.usage.totalTokens ?? "?"}
+                        {testMessageResult.usage.completionTokens ?? "?"}, total{" "}
+                        {testMessageResult.usage.totalTokens ?? "?"}
                       </span>
                     )}
                     {testMessageResult.usage && testMessageResult.timings && <span> • </span>}
                     {testMessageResult.timings && (
                       <span>
-                        Timings: prompt {testMessageResult.timings.promptMs ?? "?"}ms / gen {testMessageResult.timings.predictedMs ?? "?"}ms
+                        Timings: prompt {testMessageResult.timings.promptMs ?? "?"}ms / gen{" "}
+                        {testMessageResult.timings.predictedMs ?? "?"}ms
                       </span>
                     )}
                   </div>
                 )}
-                {!!testMessageResult.messageContent && <ResponseBlock label="Message Content" value={testMessageResult.messageContent} />}
+                {!!testMessageResult.messageContent && (
+                  <ResponseBlock label="Message Content" value={testMessageResult.messageContent} />
+                )}
                 {!!testMessageResult.reasoningContent && (
                   <ResponseBlock label="Reasoning Content" value={testMessageResult.reasoningContent} />
                 )}
@@ -442,7 +452,9 @@ export function ModelDownloadModal({ open, onClose }: Props) {
                   />
                   <div
                     className={`h-4 w-4 shrink-0 rounded-full border-2 transition-colors ${
-                      selectedQuant === model.quantization ? "border-purple-400 bg-purple-400" : "border-[var(--border)]"
+                      selectedQuant === model.quantization
+                        ? "border-purple-400 bg-purple-400"
+                        : "border-[var(--border)]"
                     }`}
                   >
                     {selectedQuant === model.quantization && (
@@ -508,7 +520,11 @@ export function ModelDownloadModal({ open, onClose }: Props) {
                     disabled={!repoInput.trim() || customModelsLoading}
                     className="flex items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)] disabled:opacity-50"
                   >
-                    {customModelsLoading ? <Loader2 size="0.875rem" className="animate-spin" /> : <Search size="0.875rem" />}
+                    {customModelsLoading ? (
+                      <Loader2 size="0.875rem" className="animate-spin" />
+                    ) : (
+                      <Search size="0.875rem" />
+                    )}
                     {isAppleSilicon ? "Validate Repo" : "List Models"}
                   </button>
                 </div>
@@ -607,7 +623,9 @@ export function ModelDownloadModal({ open, onClose }: Props) {
 
         {runtimeDiagnostics && (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)]/50 p-3">
-            <div className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]/60">Diagnostics</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]/60">
+              Diagnostics
+            </div>
             <div className="mt-2 flex flex-col gap-1 text-xs text-[var(--muted-foreground)]/75">
               {runtimeDiagnostics.gpuVendors.length > 0 && (
                 <span>Detected GPU vendors: {runtimeDiagnostics.gpuVendors.join(", ")}</span>
@@ -627,7 +645,9 @@ export function ModelDownloadModal({ open, onClose }: Props) {
                   ? " none"
                   : ""}
               </span>
-              {runtimeDiagnostics.systemLlamaPath && <span>System llama-server: {runtimeDiagnostics.systemLlamaPath}</span>}
+              {runtimeDiagnostics.systemLlamaPath && (
+                <span>System llama-server: {runtimeDiagnostics.systemLlamaPath}</span>
+              )}
               {runtimeDiagnostics.launchCommand && <span>Last launch command: {runtimeDiagnostics.launchCommand}</span>}
             </div>
           </div>
