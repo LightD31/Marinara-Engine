@@ -148,12 +148,12 @@ jobs:
           image="${{ env.REGISTRY }}/${{ steps.lower.outputs.image }}"
           digests=$(printf "${image}@sha256:%s " *)
           docker buildx imagetools create $tags $digests
-          digest=$(docker buildx imagetools inspect "$image:${{ steps.meta.outputs.version }}-lite" --raw | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')
+          digest=$(docker buildx imagetools inspect "$image:${{ steps.meta.outputs.version }}" --raw | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ steps.lower.outputs.image }}:${{ steps.meta.outputs.version }}-lite
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ steps.lower.outputs.image }}:${{ steps.meta.outputs.version }}
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v2
