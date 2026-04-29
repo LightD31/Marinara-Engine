@@ -148,15 +148,14 @@ function getLoopbackFallbackRedirectUri() {
   return `http://127.0.0.1:${getPort()}/api/spotify/callback`;
 }
 
-function isLoopbackHost(host: string) {
-  const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
-  return hostname === "127.0.0.1" || hostname === "::1";
+function stripPort(host: string) {
+  return host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
 }
 
-type RedirectUriRequest = {
-  protocol?: string;
-  headers: Record<string, string | string[] | undefined>;
-};
+function isLoopbackHost(host: string) {
+  const hostname = stripPort(host);
+  return hostname === "127.0.0.1" || hostname === "::1";
+}
 
 function firstHeaderValue(value: string | string[] | undefined): string | null {
   if (!value) return null;
@@ -166,16 +165,36 @@ function firstHeaderValue(value: string | string[] | undefined): string | null {
   return first ? first : null;
 }
 
+type RedirectUriRequest = {
+  protocol?: string;
+  hostname?: string;
+  headers: Record<string, string | string[] | undefined>;
+};
+
+/**
+ * Builds the Spotify OAuth redirect URI for an incoming request.
+ *
+ * `X-Forwarded-*` headers are intentionally not read directly here: Fastify
+ * already honours those when the operator opts in to `trustProxy`, and reading
+ * them unconditionally would let any client spoof the URI shown in the agent
+ * editor. We rely on `req.protocol` / `req.hostname` so deployments behind a
+ * reverse proxy must enable `trustProxy` for HTTPS auto-derivation to kick in;
+ * everyone else gets the safe loopback fallback (or the explicit env override).
+ */
 export function buildSpotifyRedirectUri(req: RedirectUriRequest): string {
   const override = getSpotifyRedirectUriOverride();
   if (override) return override;
 
-  const forwardedProto = firstHeaderValue(req.headers["x-forwarded-proto"]);
-  const forwardedHost = firstHeaderValue(req.headers["x-forwarded-host"]);
-  const protocol = (forwardedProto ?? req.protocol ?? "http").toLowerCase();
-  const host = forwardedHost ?? firstHeaderValue(req.headers["host"]);
+  const protocol = (req.protocol ?? "http").toLowerCase();
+  const hostHeader = firstHeaderValue(req.headers["host"]);
+  const hostname = req.hostname ?? (hostHeader ? stripPort(hostHeader) : null);
 
-  if (!host) return getLoopbackFallbackRedirectUri();
+  if (!hostname) return getLoopbackFallbackRedirectUri();
+
+  // Fastify's req.hostname strips the port; the Host header preserves it. Spotify
+  // expects the exact registered URI including port, so prefer the header when
+  // available and fall back to hostname-only otherwise.
+  const host = hostHeader ?? hostname;
 
   if (protocol === "https") {
     return `https://${host}/api/spotify/callback`;

@@ -142,6 +142,7 @@ export function AgentEditor() {
     redirectUri: string | null;
   } | null>(null);
   const [spotifyConnecting, setSpotifyConnecting] = useState(false);
+  const [spotifyConnectError, setSpotifyConnectError] = useState<string | null>(null);
   const [spotifyPasteOpen, setSpotifyPasteOpen] = useState(false);
   const [spotifyPasteValue, setSpotifyPasteValue] = useState("");
   const [spotifyPasteError, setSpotifyPasteError] = useState<string | null>(null);
@@ -898,6 +899,7 @@ export function AgentEditor() {
                     onClick={async () => {
                       if (!localSpotifyClientId.trim() || !dbConfig?.id) return;
                       setSpotifyConnecting(true);
+                      setSpotifyConnectError(null);
                       try {
                         // Save clientId first if dirty
                         if (dirty) {
@@ -919,51 +921,53 @@ export function AgentEditor() {
                             agentId: dbConfig.id,
                           })}`,
                         );
-                        const data = await res.json();
-                        if (data.authUrl) {
-                          window.open(data.authUrl, "_blank", "width=500,height=700");
-                          // Clear any existing poll before starting a new one
-                          if (spotifyPollRef.current) clearInterval(spotifyPollRef.current);
-                          if (spotifyTimeoutRef.current) clearTimeout(spotifyTimeoutRef.current);
-                          // Poll for connection status
-                          spotifyPollRef.current = setInterval(async () => {
-                            try {
-                              const statusRes = await fetch(
-                                `/api/spotify/status?agentId=${encodeURIComponent(dbConfig.id)}`,
-                              );
-                              const status = await statusRes.json();
-                              if (status.connected) {
-                                clearInterval(spotifyPollRef.current!);
-                                spotifyPollRef.current = null;
-                                if (spotifyTimeoutRef.current) {
-                                  clearTimeout(spotifyTimeoutRef.current);
-                                  spotifyTimeoutRef.current = null;
-                                }
-                                setSpotifyStatus({
-                                  connected: true,
-                                  expired: false,
-                                  redirectUri: status.redirectUri ?? null,
-                                });
-                                setSpotifyConnecting(false);
-                                setSpotifyPasteOpen(false);
-                                setSpotifyPasteValue("");
-                                setSpotifyPasteError(null);
-                              }
-                            } catch {
-                              // keep polling
-                            }
-                          }, 2000);
-                          // Stop polling after 5 minutes
-                          spotifyTimeoutRef.current = setTimeout(() => {
-                            if (spotifyPollRef.current) {
-                              clearInterval(spotifyPollRef.current);
-                              spotifyPollRef.current = null;
-                            }
-                            spotifyTimeoutRef.current = null;
-                            setSpotifyConnecting(false);
-                          }, 5 * 60_000);
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || !data.authUrl) {
+                          throw new Error(data.error ?? `Authorize request failed (${res.status})`);
                         }
-                      } catch {
+                        window.open(data.authUrl, "_blank", "width=500,height=700");
+                        // Clear any existing poll before starting a new one
+                        if (spotifyPollRef.current) clearInterval(spotifyPollRef.current);
+                        if (spotifyTimeoutRef.current) clearTimeout(spotifyTimeoutRef.current);
+                        // Poll for connection status
+                        spotifyPollRef.current = setInterval(async () => {
+                          try {
+                            const statusRes = await fetch(
+                              `/api/spotify/status?agentId=${encodeURIComponent(dbConfig.id)}`,
+                            );
+                            const status = await statusRes.json();
+                            if (status.connected) {
+                              clearInterval(spotifyPollRef.current!);
+                              spotifyPollRef.current = null;
+                              if (spotifyTimeoutRef.current) {
+                                clearTimeout(spotifyTimeoutRef.current);
+                                spotifyTimeoutRef.current = null;
+                              }
+                              setSpotifyStatus({
+                                connected: true,
+                                expired: false,
+                                redirectUri: status.redirectUri ?? null,
+                              });
+                              setSpotifyConnecting(false);
+                              setSpotifyPasteOpen(false);
+                              setSpotifyPasteValue("");
+                              setSpotifyPasteError(null);
+                            }
+                          } catch {
+                            // keep polling
+                          }
+                        }, 2000);
+                        // Stop polling after 10 minutes to match the server-side pendingAuth TTL
+                        spotifyTimeoutRef.current = setTimeout(() => {
+                          if (spotifyPollRef.current) {
+                            clearInterval(spotifyPollRef.current);
+                            spotifyPollRef.current = null;
+                          }
+                          spotifyTimeoutRef.current = null;
+                          setSpotifyConnecting(false);
+                        }, 10 * 60_000);
+                      } catch (err) {
+                        setSpotifyConnectError(err instanceof Error ? err.message : "Failed to start Spotify auth");
                         setSpotifyConnecting(false);
                       }
                     }}
@@ -977,6 +981,10 @@ export function AgentEditor() {
                     <Music size="0.875rem" />
                     {spotifyConnecting ? "Waiting for authorization..." : "Connect Spotify Account"}
                   </button>
+                )}
+
+                {spotifyConnectError && !spotifyStatus?.connected && (
+                  <p className="text-[0.6875rem] text-red-400/80">{spotifyConnectError}</p>
                 )}
 
                 {/* Manual paste-back fallback (HTTP LAN/remote installs where the

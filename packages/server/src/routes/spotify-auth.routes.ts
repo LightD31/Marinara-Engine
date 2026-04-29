@@ -10,7 +10,7 @@ import { logger } from "../lib/logger.js";
 // In-flight PKCE verifiers keyed by state param (short-lived, cleaned up on callback)
 const pendingAuth = new Map<
   string,
-  { codeVerifier: string; agentId: string; redirectUri: string; createdAt: number }
+  { codeVerifier: string; clientId: string; agentId: string; redirectUri: string; createdAt: number }
 >();
 
 const SPOTIFY_SCOPES = [
@@ -68,15 +68,13 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
 
     pendingAuth.delete(state);
 
-    const { codeVerifier, agentId, redirectUri } = pending;
+    const { codeVerifier, clientId, agentId, redirectUri } = pending;
 
     const agent = await storage.getById(agentId);
     if (!agent) return { ok: false, status: 404, reason: "Agent not found" };
 
     const settings =
       agent.settings && typeof agent.settings === "string" ? JSON.parse(agent.settings) : (agent.settings ?? {});
-    const clientId = settings.spotifyClientId as string;
-    if (!clientId) return { ok: false, status: 400, reason: "No Client ID configured" };
 
     try {
       const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
@@ -147,7 +145,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
     const state = generateRandomString(32);
 
     const redirectUri = buildSpotifyRedirectUri(req as FastifyRequest);
-    pendingAuth.set(state, { codeVerifier, agentId, redirectUri, createdAt: Date.now() });
+    pendingAuth.set(state, { codeVerifier, clientId, agentId, redirectUri, createdAt: Date.now() });
 
     const params = new URLSearchParams({
       response_type: "code",
