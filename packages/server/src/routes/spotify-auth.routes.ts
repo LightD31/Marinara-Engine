@@ -66,6 +66,14 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
       return { ok: false, status: 400, reason: "Authorization session expired or was already used." };
     }
 
+    // Enforce the TTL here too: /callback never triggers cleanupPending(), so
+    // without this check a stale state could still be exchanged long after the
+    // advertised 10-minute window if no other request happens to evict it.
+    if (Date.now() - pending.createdAt > 10 * 60_000) {
+      pendingAuth.delete(state);
+      return { ok: false, status: 400, reason: "Authorization session expired or was already used." };
+    }
+
     pendingAuth.delete(state);
 
     const { codeVerifier, clientId, agentId, redirectUri } = pending;
