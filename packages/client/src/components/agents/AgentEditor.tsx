@@ -67,6 +67,17 @@ function createCustomAgentType(name: string): string {
   return `custom-${slug}-${suffix}`;
 }
 
+// Mirrors the server's buildSpotifyRedirectUri rule: Spotify only accepts
+// https:// or http://127.0.0.1, so fall back to loopback whenever the page
+// is served over plain HTTP from a non-loopback host.
+function getDisplayedSpotifyRedirectUri(): string {
+  if (typeof window === "undefined") return "http://127.0.0.1:7860/api/spotify/callback";
+  const { protocol, hostname, origin, port } = window.location;
+  const isLoopback = hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+  if (protocol === "https:" || isLoopback) return `${origin}/api/spotify/callback`;
+  return `http://127.0.0.1:${port || "7860"}/api/spotify/callback`;
+}
+
 // ═══════════════════════════════════════════════
 //  Phase metadata
 // ═══════════════════════════════════════════════
@@ -1094,10 +1105,7 @@ export function AgentEditor() {
                     <li>
                       In Redirect URIs, add:{" "}
                       <code className="text-white/50 select-all">
-                        {spotifyStatus?.redirectUri ??
-                          (typeof window !== "undefined"
-                            ? `${window.location.origin}/api/spotify/callback`
-                            : `http://127.0.0.1:7860/api/spotify/callback`)}
+                        {spotifyStatus?.redirectUri ?? getDisplayedSpotifyRedirectUri()}
                       </code>
                     </li>
                     <li>

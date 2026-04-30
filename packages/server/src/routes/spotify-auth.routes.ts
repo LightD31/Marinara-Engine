@@ -13,6 +13,8 @@ const pendingAuth = new Map<
   { codeVerifier: string; clientId: string; agentId: string; redirectUri: string; createdAt: number }
 >();
 
+const AUTH_TTL_MS = 10 * 60_000;
+
 const SPOTIFY_SCOPES = [
   "user-modify-playback-state",
   "user-read-playback-state",
@@ -46,11 +48,11 @@ type ExchangeResult =
 export async function spotifyAuthRoutes(app: FastifyInstance) {
   const storage = createAgentsStorage(app.db);
 
-  // Clean up stale pending auth entries (older than 10 minutes)
+  // Clean up stale pending auth entries (older than AUTH_TTL_MS)
   function cleanupPending() {
     const now = Date.now();
     for (const [key, entry] of pendingAuth) {
-      if (now - entry.createdAt > 10 * 60_000) pendingAuth.delete(key);
+      if (now - entry.createdAt > AUTH_TTL_MS) pendingAuth.delete(key);
     }
   }
 
@@ -58,7 +60,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
   async function completeExchange(args: { code: string; state: string }): Promise<ExchangeResult> {
     const { code, state } = args;
     const pending = pendingAuth.get(state);
-    const expired = pending && Date.now() - pending.createdAt > 10 * 60_000;
+    const expired = pending && Date.now() - pending.createdAt > AUTH_TTL_MS;
     if (!pending || expired) {
       if (expired) pendingAuth.delete(state);
       return { ok: false, status: 400, reason: "Authorization session expired or was already used." };
@@ -172,28 +174,34 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
     const { code, error, state } = req.query;
 
     if (error || !code || !state) {
-      return reply.type("text/html").send(
-        `<html><body style="font-family:system-ui;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+      return reply
+        .status(400)
+        .type("text/html")
+        .send(
+          `<html><body style="font-family:system-ui;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
           <div style="text-align:center">
             <h2 style="color:#f44">Spotify Authorization Failed</h2>
             <p>${htmlEscape(error ?? "Missing authorization code")}</p>
             <p style="color:#888">You can close this window.</p>
           </div>
         </body></html>`,
-      );
+        );
     }
 
     const result = await completeExchange({ code, state });
     if (!result.ok) {
-      return reply.type("text/html").send(
-        `<html><body style="font-family:system-ui;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+      return reply
+        .status(result.status)
+        .type("text/html")
+        .send(
+          `<html><body style="font-family:system-ui;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
           <div style="text-align:center">
             <h2 style="color:#f44">Spotify Authorization Failed</h2>
             <p style="color:#888">${htmlEscape(result.reason)}</p>
             <p style="color:#888">You can close this window and try again.</p>
           </div>
         </body></html>`,
-      );
+        );
     }
 
     return reply.type("text/html").send(
