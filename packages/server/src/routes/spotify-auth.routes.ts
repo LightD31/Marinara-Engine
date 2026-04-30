@@ -70,11 +70,14 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
 
     const { codeVerifier, clientId, agentId, redirectUri } = pending;
 
+    // Existence-only check up front; the settings blob used for the merge is
+    // re-read immediately before storage.update below. storage.update
+    // serialises settings as a whole JSON column (see agents.storage.ts), so
+    // anything written between the early read and the post-network write would
+    // be silently clobbered. Re-reading right before write narrows the race
+    // window from the OAuth round-trip duration to a single tick.
     const agent = await storage.getById(agentId);
     if (!agent) return { ok: false, status: 404, reason: "Agent not found" };
-
-    const settings =
-      agent.settings && typeof agent.settings === "string" ? JSON.parse(agent.settings) : (agent.settings ?? {});
 
     try {
       const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
@@ -107,9 +110,16 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
         scope: string;
       };
 
+      const latestAgent = await storage.getById(agentId);
+      if (!latestAgent) return { ok: false, status: 404, reason: "Agent not found" };
+      const latestSettings =
+        latestAgent.settings && typeof latestAgent.settings === "string"
+          ? JSON.parse(latestAgent.settings)
+          : (latestAgent.settings ?? {});
+
       await storage.update(agentId, {
         settings: {
-          ...settings,
+          ...latestSettings,
           spotifyAccessToken: tokens.access_token,
           spotifyRefreshToken: tokens.refresh_token,
           spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
@@ -119,7 +129,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
 
       return { ok: true };
     } catch (err) {
-      logger.warn(err, "Spotify token exchange failed");
+      logger.error(err, "Spotify token exchange failed");
       return {
         ok: false,
         status: 500,
