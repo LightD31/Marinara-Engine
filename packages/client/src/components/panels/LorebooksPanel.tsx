@@ -68,8 +68,12 @@ export function LorebooksPanel() {
   const activeChatMetadata = activeChat?.metadata;
   const activeLorebookIds: string[] = useMemo(() => {
     if (!activeChatMetadata) return [];
-    const meta = typeof activeChatMetadata === "string" ? JSON.parse(activeChatMetadata) : activeChatMetadata;
-    return Array.isArray(meta.activeLorebookIds) ? meta.activeLorebookIds : [];
+    try {
+      const meta = typeof activeChatMetadata === "string" ? JSON.parse(activeChatMetadata) : activeChatMetadata;
+      return Array.isArray(meta.activeLorebookIds) ? meta.activeLorebookIds : [];
+    } catch {
+      return [];
+    }
   }, [activeChatMetadata]);
   const activeCharacterIds = useMemo(() => activeChat?.characterIds ?? [], [activeChat?.characterIds]);
   const activePersonaId = activeChat?.personaId ?? null;
