@@ -49,18 +49,29 @@ export function createCustomToolsStorage(db: DB) {
     },
 
     async update(id: string, data: Partial<CreateCustomToolInput>) {
+      const current = await this.getById(id);
+      if (!current) return null;
+      const effectiveExecutionType = data.executionType ?? current.executionType;
       const updateFields: Record<string, unknown> = { updatedAt: now() };
       if (data.name !== undefined) updateFields.name = data.name;
       if (data.description !== undefined) updateFields.description = data.description;
       if (data.parametersSchema !== undefined) updateFields.parametersSchema = JSON.stringify(data.parametersSchema);
-      if (data.executionType !== undefined) updateFields.executionType = data.executionType;
+      if (data.executionType !== undefined) {
+        updateFields.executionType = data.executionType;
+        if (data.executionType === "script" && current.executionType !== "script" && data.enabled === undefined) {
+          updateFields.enabled = "false";
+        }
+      }
       if (data.webhookUrl !== undefined) updateFields.webhookUrl = data.webhookUrl;
       if (data.staticResult !== undefined) updateFields.staticResult = data.staticResult;
       if (data.scriptBody !== undefined) updateFields.scriptBody = data.scriptBody;
+      if (effectiveExecutionType === "script" && !isCustomToolScriptEnabled()) {
+        updateFields.enabled = "false";
+      }
       if (data.enabled !== undefined) {
-        const current = await this.getById(id);
-        const executionType = data.executionType ?? current?.executionType;
-        updateFields.enabled = String(executionType === "script" && !isCustomToolScriptEnabled() ? false : data.enabled);
+        updateFields.enabled = String(
+          effectiveExecutionType === "script" && !isCustomToolScriptEnabled() ? false : data.enabled,
+        );
       }
       await db.update(customTools).set(updateFields).where(eq(customTools.id, id));
       return this.getById(id);

@@ -189,16 +189,25 @@ export function STBulkImportModal({ open, onClose }: Props) {
         },
         body: JSON.stringify({ path: dirPath || "" }),
       });
-      const data = (await res.json()) as { success: boolean; path?: string; folderToken?: string; folders?: string[] };
-      if (data.success && data.path) {
-        setBrowserPath(data.path);
-        setFolderToken(data.folderToken ?? null);
-        setBrowserFolders(data.folders ?? []);
+      const data = (await res.json().catch(() => ({ success: false, error: res.statusText }))) as {
+        success: boolean;
+        path?: string;
+        folderToken?: string;
+        folders?: string[];
+        error?: string;
+      };
+      if (!res.ok || !data.success || !data.path) {
+        setError(data.error ?? res.statusText ?? "Unable to list directories");
+        return;
       }
-    } catch {
-      // Silent fallback
+      setBrowserPath(data.path);
+      setFolderToken(data.folderToken ?? null);
+      setBrowserFolders(data.folders ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to list directories");
+    } finally {
+      setBrowserLoading(false);
     }
-    setBrowserLoading(false);
   }, []);
 
   const handleBrowse = useCallback(async () => {
@@ -209,7 +218,17 @@ export function STBulkImportModal({ open, onClose }: Props) {
         method: "POST",
         headers: getAdminSecretHeader(),
       });
-      const data = (await res.json()) as { success: boolean; path?: string; folderToken?: string; error?: string };
+      const data = (await res.json().catch(() => ({ success: false, error: res.statusText }))) as {
+        success: boolean;
+        path?: string;
+        folderToken?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setError(data.error ?? res.statusText ?? "Unable to open folder picker");
+        setPicking(false);
+        return;
+      }
       if (data.success && data.path) {
         setFolderPath(data.path);
         setFolderToken(data.folderToken ?? null);

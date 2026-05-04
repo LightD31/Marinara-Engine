@@ -30,8 +30,8 @@ function withEnv<T>(patch: EnvPatch, fn: () => Promise<T>) {
 async function buildHookApp() {
   const app = Fastify({ logger: false });
   app.addHook("onRequest", securityHeadersHook);
-  app.addHook("onRequest", basicAuthHook);
   app.addHook("onRequest", rateLimitHook);
+  app.addHook("onRequest", basicAuthHook);
   app.addHook("onRequest", csrfProtectionHook);
 
   app.post("/api/mutate", async () => ({ ok: true }));
@@ -144,8 +144,8 @@ test("same-origin unsafe API requests require the CSRF header", async () =>
     }
   }));
 
-test("CSRF protection honors forwarded proto for reverse proxy HTTPS origins", async () =>
-  withEnv({}, async () => {
+test("CSRF protection allows configured reverse proxy HTTPS origins", async () =>
+  withEnv({ CSRF_TRUSTED_ORIGINS: "https://chat.example.test" }, async () => {
     const app = await buildHookApp();
     try {
       const allowed = await app.inject({
@@ -161,6 +161,27 @@ test("CSRF protection honors forwarded proto for reverse proxy HTTPS origins", a
         },
       });
       assert.equal(allowed.statusCode, 200);
+    } finally {
+      await app.close();
+    }
+  }));
+
+test("CSRF protection does not trust Host as an origin allowlist", async () =>
+  withEnv({ CSRF_TRUSTED_ORIGINS: undefined }, async () => {
+    const app = await buildHookApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/mutate",
+        remoteAddress: "127.0.0.1",
+        headers: {
+          host: "evil.example",
+          origin: "https://evil.example",
+          "sec-fetch-site": "same-origin",
+          [CSRF_HEADER]: CSRF_HEADER_VALUE,
+        },
+      });
+      assert.equal(res.statusCode, 403);
     } finally {
       await app.close();
     }

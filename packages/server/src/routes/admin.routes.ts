@@ -145,11 +145,11 @@ export async function adminRoutes(app: FastifyInstance) {
   };
 
   app.post<{ Body: { confirm: boolean; scopes?: ExpungeScope[] } }>("/expunge", async (req, reply) => {
+    if (!requirePrivilegedAccess(req, reply, { feature: "Admin data expunge" })) return;
     const { confirm, scopes } = req.body as { confirm?: boolean; scopes?: unknown[] };
     if (!confirm) {
       return reply.status(400).send({ error: "Must send { confirm: true } to proceed" });
     }
-    if (!requirePrivilegedAccess(req, reply, { feature: "Admin data expunge" })) return;
 
     const requestedScopes = Array.isArray(scopes) ? scopes.filter(isValidScope) : [];
     return runExpunge(requestedScopes, reply);

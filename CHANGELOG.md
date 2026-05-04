@@ -45,6 +45,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Removed the seeded default provider key, encrypted Spotify token storage, and redacted obvious secrets from profile export.
 - Hardened chat HTML sanitization and SVG/image handling, then upgraded vulnerable production and build dependencies.
 - Hardened Docker, Android WebView/backup, GitHub Actions action references, and Windows installer dependency verification.
+- Breaking/default changes: privileged routes now require `ADMIN_SECRET`, Docker binds to localhost by default, and update apply, custom script tools, and sidecar runtime installs are disabled until operators opt in with the documented environment switches.
+- Operators who intentionally need the old exposure model must set `ADMIN_SECRET`, choose a remote bind address for Docker/launchers, and explicitly enable only the required flows such as `UPDATES_APPLY_ENABLED`, `CUSTOM_TOOL_SCRIPT_ENABLED`, or `SIDECAR_RUNTIME_INSTALL_ENABLED`.
 
 ### Fixed
 

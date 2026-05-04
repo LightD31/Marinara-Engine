@@ -155,14 +155,15 @@ async function executeCustomTool(tool: CustomToolDef, args: Record<string, unkno
     case "webhook": {
       if (!tool.webhookUrl) return { error: "No webhook URL configured" };
       try {
+        const allowLocal = isWebhookLocalUrlsEnabled();
         const res = await safeFetch(tool.webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tool: tool.name, arguments: args }),
           signal: AbortSignal.timeout(10_000),
           policy: {
-            allowLocal: isWebhookLocalUrlsEnabled(),
-            allowedProtocols: ["https:", "http:"],
+            allowLocal,
+            allowedProtocols: allowLocal ? ["https:", "http:"] : ["https:"],
           },
           maxResponseBytes: 512 * 1024,
         });

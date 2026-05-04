@@ -48,7 +48,7 @@ goto :node_ok
 :install_node
 echo  [..] Node.js 20+ not found - downloading installer...
 set "NODE_MSI=%TEMP%\node-lts-install.msi"
-powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%NODE_DOWNLOAD_URL%' -OutFile '%NODE_MSI%' -UseBasicParsing } catch { exit 1 }"
+powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri ""%NODE_DOWNLOAD_URL%"" -OutFile ""%NODE_MSI%"" -UseBasicParsing } catch { exit 1 }"
 if errorlevel 1 (
     set "INSTALL_ERROR=Failed to download Node.js. Please install manually from https://nodejs.org"
     goto :fatal
@@ -97,7 +97,7 @@ goto :git_ok
 :install_git
 echo  [..] Git not found - downloading installer...
 set "GIT_EXE=%TEMP%\git-install.exe"
-powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%GIT_DOWNLOAD_URL%' -OutFile '%GIT_EXE%' -UseBasicParsing } catch { exit 1 }"
+powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri ""%GIT_DOWNLOAD_URL%"" -OutFile ""%GIT_EXE%"" -UseBasicParsing } catch { exit 1 }"
 if errorlevel 1 (
     set "INSTALL_ERROR=Failed to download Git. Please install manually from https://git-scm.com"
     goto :fatal
@@ -309,7 +309,7 @@ set "HASH_PATH=%~1"
 set "EXPECTED_HASH=%~2"
 set "HASH_LABEL=%~3"
 set "ACTUAL_HASH="
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "try { ((Get-FileHash -Algorithm SHA256 -LiteralPath '%HASH_PATH%').Hash).ToLowerInvariant() } catch { exit 1 }"`) do set "ACTUAL_HASH=%%i"
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "try { ((Get-FileHash -Algorithm SHA256 -LiteralPath ""%HASH_PATH%"").Hash).ToLowerInvariant() } catch { exit 1 }"`) do set "ACTUAL_HASH=%%i"
 if not defined ACTUAL_HASH (
     echo  [ERROR] Could not calculate SHA-256 for %HASH_LABEL%.
     exit /b 1
@@ -323,7 +323,7 @@ exit /b 0
 :verify_authenticode
 set "SIGN_PATH=%~1"
 set "SIGN_LABEL=%~2"
-powershell -NoProfile -Command "try { $sig = Get-AuthenticodeSignature -LiteralPath '%SIGN_PATH%'; if ($sig.Status -ne 'Valid') { Write-Error ('Invalid signature: ' + $sig.Status); exit 1 } } catch { exit 1 }"
+powershell -NoProfile -Command "try { $sig = Get-AuthenticodeSignature -LiteralPath ""%SIGN_PATH%""; if ($sig.Status -ne 'Valid') { Write-Error ('Invalid signature: ' + $sig.Status); exit 1 } } catch { exit 1 }"
 if errorlevel 1 (
     echo  [ERROR] %SIGN_LABEL% Authenticode signature is invalid.
     exit /b 1

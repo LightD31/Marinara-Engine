@@ -12,23 +12,17 @@ function isSameOriginApi(input: RequestInfo | URL): boolean {
   }
 }
 
-function mergeHeaders(init?: RequestInit): Headers {
-  return new Headers(init?.headers);
-}
-
 export function installCsrfFetchShim() {
   const nativeFetch = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const method =
-      init?.method?.toUpperCase() ??
-      (typeof Request !== "undefined" && input instanceof Request ? input.method.toUpperCase() : "GET");
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
 
     if (!UNSAFE_METHODS.has(method) || !isSameOriginApi(input)) {
       return nativeFetch(input, init);
     }
 
-    const headers = mergeHeaders(init);
-    headers.set(CSRF_HEADER, CSRF_HEADER_VALUE);
-    return nativeFetch(input, { ...init, headers });
+    const request = new Request(input, init);
+    request.headers.set(CSRF_HEADER, CSRF_HEADER_VALUE);
+    return nativeFetch(request);
   };
 }

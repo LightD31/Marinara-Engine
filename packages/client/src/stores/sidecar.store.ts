@@ -16,7 +16,7 @@ import type {
   SidecarQuantization,
 } from "@marinara-engine/shared";
 import { SIDECAR_DEFAULT_CONFIG } from "@marinara-engine/shared";
-import { ADMIN_SECRET_STORAGE_KEY, api } from "../lib/api-client.js";
+import { api } from "../lib/api-client.js";
 
 interface SidecarTestMessageResult {
   success: boolean;
@@ -131,16 +131,27 @@ async function consumeDownloadStream(
   set: (partial: Partial<SidecarState>) => void,
   get: () => SidecarState,
 ): Promise<void> {
-  const adminSecret = localStorage.getItem(ADMIN_SECRET_STORAGE_KEY)?.trim();
-  const response = await fetch(path, {
+  const apiPath = path.startsWith("/api/") ? path.slice(4) : path;
+  const response = await api.raw(apiPath, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(adminSecret ? { "X-Admin-Secret": adminSecret } : {}) },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    cache: "no-store",
   });
 
-  if (!response.ok || !response.body) {
-    throw new Error("Download request failed");
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    let detail = text.slice(0, 300) || response.statusText || "unknown error";
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      detail = parsed.error ?? parsed.message ?? detail;
+    } catch {
+      // Keep the plain-text detail.
+    }
+    throw new Error(`Download request failed (${response.status}): ${detail}`);
+  }
+
+  if (!response.body) {
+    throw new Error(`Download request failed (${response.status}): missing response body`);
   }
 
   const reader = response.body.getReader();

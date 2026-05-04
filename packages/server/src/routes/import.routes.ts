@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { execFile } from "child_process";
 import { platform, homedir } from "os";
 import { readdir, stat } from "fs/promises";
-import { relative, resolve as pathResolve, sep } from "path";
+import { resolve as pathResolve } from "path";
 import { importSTChat } from "../services/import/st-chat.importer.js";
 import { importSTCharacter, importCharX } from "../services/import/st-character.importer.js";
 import { importSTPreset } from "../services/import/st-prompt.importer.js";
@@ -39,10 +39,12 @@ function issueFolderToken(pathValue: string) {
 }
 
 function isUnderRoot(pathValue: string, root: string): boolean {
-  const resolvedRoot = pathResolve(root);
-  const resolvedPath = pathResolve(pathValue);
-  const rel = relative(resolvedRoot, resolvedPath);
-  return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
+  try {
+    assertInsideDir(root, pathResolve(pathValue));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isAllowedImportRoot(pathValue: string) {
@@ -68,6 +70,9 @@ function resolveImportFolder(body: { folderPath?: unknown; folderToken?: unknown
     if (!entry) return { ok: false, error: "Folder token is missing or expired" };
     if (rawPath && !safeCompareString(pathResolve(rawPath), entry.path)) {
       return { ok: false, error: "Folder token does not match folderPath" };
+    }
+    if (getImportAllowedRoots().length > 0 && !isAllowedImportRoot(entry.path)) {
+      return { ok: false, error: "folderPath is not allowed. Use the folder picker/browser or set IMPORT_ALLOWED_ROOTS." };
     }
     return { ok: true, path: entry.path };
   }

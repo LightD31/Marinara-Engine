@@ -68,16 +68,7 @@ export function isJsonRepairApiError(error: unknown): boolean {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { ...getAdminSecretHeader(), ...(init?.headers as Record<string, string>) };
-  // Only set Content-Type for requests that have a body
-  if (init?.body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers,
-    cache: "no-store",
-  });
+  const res = await apiFetch(path, init);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
@@ -90,7 +81,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  for (const [name, value] of Object.entries(getAdminSecretHeader())) {
+    headers.set(name, value);
+  }
+
+  // Only default string bodies to JSON; FormData/Blob/etc. need browser-managed headers.
+  if (typeof init?.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  return fetch(`${BASE}${path}`, {
+    ...init,
+    headers,
+    cache: "no-store",
+  });
+}
+
 export const api = {
+  raw: (path: string, init?: RequestInit) => apiFetch(path, init),
+
   get: <T>(path: string, init?: RequestInit) => request<T>(path, init),
 
   post: <T>(path: string, body?: unknown) =>

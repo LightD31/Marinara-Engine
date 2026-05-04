@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { getCsrfTrustedOrigins, getHost, getPort, getServerProtocol } from "../config/runtime-config.js";
 import { CSRF_HEADER, CSRF_HEADER_VALUE } from "../utils/security.js";
+import { isLoopbackIp } from "./ip-allowlist.js";
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const SAFE_FETCH_SITES = new Set(["same-origin", "same-site", "none"]);
@@ -25,23 +26,17 @@ function isLoopbackHostname(hostname: string): boolean {
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
-function requestOrigin(request: FastifyRequest): string | null {
-  const host = firstHeader(request.headers.host);
-  if (!host) return null;
-  const forwardedProto = firstHeader(request.headers["x-forwarded-proto"]);
-  const protocol = forwardedProto && /^https?$/i.test(forwardedProto) ? forwardedProto.toLowerCase() : (request.protocol ?? getServerProtocol());
-  return normalizeOrigin(`${protocol}://${host}`);
-}
-
-function configuredOrigins(request: FastifyRequest): Set<string> {
+function configuredOrigins(): Set<string> {
   const origins = new Set<string>();
-  const current = requestOrigin(request);
-  if (current) origins.add(current);
 
   const port = getPort();
   origins.add(`http://127.0.0.1:${port}`);
   origins.add(`http://localhost:${port}`);
-  origins.add(`${getServerProtocol()}://${getHost()}:${port}`);
+
+  const configuredHost = getHost();
+  if (configuredHost !== "0.0.0.0" && configuredHost !== "::") {
+    origins.add(`${getServerProtocol()}://${configuredHost}:${port}`);
+  }
 
   for (const trusted of getCsrfTrustedOrigins()) {
     const origin = normalizeOrigin(trusted);
@@ -53,11 +48,11 @@ function configuredOrigins(request: FastifyRequest): Set<string> {
 function isAllowedOrigin(originValue: string, request: FastifyRequest): boolean {
   const origin = normalizeOrigin(originValue);
   if (!origin) return false;
-  if (configuredOrigins(request).has(origin)) return true;
+  if (configuredOrigins().has(origin)) return true;
 
   try {
     const parsed = new URL(origin);
-    if (isLoopbackHostname(parsed.hostname)) return true;
+    if (isLoopbackHostname(parsed.hostname) && isLoopbackIp(request.ip)) return true;
   } catch {
     return false;
   }

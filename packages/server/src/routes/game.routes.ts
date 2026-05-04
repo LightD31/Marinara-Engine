@@ -3527,8 +3527,17 @@ export async function gameRoutes(app: FastifyInstance) {
       const parsedProgression = parseJSON(extraction.content) as Record<string, unknown>;
       updatedProgression = applyCampaignProgressionPayload(parsedProgression, currentProgression);
     } catch (err) {
-      logger.warn(err, "[game/session/update-campaign-progression] Campaign progression parsing failed");
-      logger.warn("[game/session/update-campaign-progression] Invalid JSON tail: %s", extraction.content.slice(-800));
+      logger.warn(
+        err,
+        "[game/session/update-campaign-progression] Campaign progression parsing failed (chars=%d)",
+        extraction.content.length,
+      );
+      if (logger.isLevelEnabled("debug")) {
+        logger.debug(
+          "[game/session/update-campaign-progression] Invalid JSON tail (debug): %s",
+          extraction.content.slice(-200),
+        );
+      }
       sendJsonRepairError(
         reply,
         "The campaign progression update was not valid JSON.",

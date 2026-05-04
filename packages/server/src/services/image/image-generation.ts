@@ -832,7 +832,9 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
   for (let i = 0; i < COMFYUI_GEN_TIMEOUT; i++) {
     await new Promise((r) => setTimeout(r, 1000));
 
-    const historyResp = await imageFetch(`${base}/history/${prompt_id}`);
+    const historyResp = await imageFetch(`${base}/history/${prompt_id}`, {
+      signal: AbortSignal.timeout(IMAGE_GEN_TIMEOUT),
+    });
     if (!historyResp.ok) continue;
 
     const history = (await historyResp.json()) as Record<
@@ -856,7 +858,9 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
           type: img.type || "output",
         });
 
-        const imgResp = await imageFetch(`${base}/view?${params}`);
+        const imgResp = await imageFetch(`${base}/view?${params}`, {
+          signal: AbortSignal.timeout(IMAGE_GEN_TIMEOUT),
+        });
         if (!imgResp.ok) {
           throw new Error(`ComfyUI image fetch failed (${imgResp.status})`);
         }

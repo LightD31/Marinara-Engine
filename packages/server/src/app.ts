@@ -103,11 +103,11 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // ── IP Allowlist ──
   app.addHook("onRequest", ipAllowlistHook);
 
-  // ── HTTP Basic Auth ──
-  app.addHook("onRequest", basicAuthHook);
-
   // ── Lightweight API abuse throttling ──
   app.addHook("onRequest", rateLimitHook);
+
+  // ── HTTP Basic Auth ──
+  app.addHook("onRequest", basicAuthHook);
 
   // ── CSRF / Origin protection for unsafe API requests ──
   app.addHook("onRequest", csrfProtectionHook);

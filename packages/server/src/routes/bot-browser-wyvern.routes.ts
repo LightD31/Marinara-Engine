@@ -110,10 +110,15 @@ export async function botBrowserWyvernRoutes(app: FastifyInstance) {
       url = `${WYVERN_IMAGE_BASE}/${imgPath}`;
     }
 
+    const parsedUrl = new URL(url);
+    if (parsedUrl.hostname !== "imagedelivery.net" && !parsedUrl.hostname.endsWith(".imagedelivery.net")) {
+      return reply.status(400).send({ error: "Invalid avatar host" });
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await safeFetch(url, {
+      const res = await safeFetch(parsedUrl, {
         signal: controller.signal,
         policy: { allowedProtocols: ["https:"] },
         allowedContentTypes: ["image/"],

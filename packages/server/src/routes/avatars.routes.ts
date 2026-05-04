@@ -88,7 +88,7 @@ export async function avatarsRoutes(app: FastifyInstance) {
     }
 
     // Extract base64 data from data URL
-    const match = avatar.match(/^data:image\/\w+;base64,(.+)$/);
+    const match = avatar.match(/^data:image\/([\w.+-]+);base64,(.+)$/);
     if (!match) {
       return reply.status(400).send({ error: "Invalid avatar format — expected base64 data URL" });
     }
@@ -104,8 +104,9 @@ export async function avatarsRoutes(app: FastifyInstance) {
     const npcDir = join(NPC_AVATAR_DIR, chatId);
     if (!existsSync(npcDir)) mkdirSync(npcDir, { recursive: true });
 
-    const imageBuffer = Buffer.from(match[1]!, "base64");
-    const image = isAllowedImageBuffer(imageBuffer, ".png");
+    const hintedExt = `.${match[1]!.replace("+xml", "")}`;
+    const imageBuffer = Buffer.from(match[2]!, "base64");
+    const image = isAllowedImageBuffer(imageBuffer, hintedExt);
     if (!image) {
       return reply.status(400).send({ error: "Unsupported or invalid avatar image" });
     }

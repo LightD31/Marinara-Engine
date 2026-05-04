@@ -35,14 +35,16 @@ function resolveAvatarWritePath(dataDir: string, avatarPath: unknown) {
 }
 
 function redactAgentSecrets(agent: any) {
+  const SECRET_KEY_RE = /token|secret|password|api[_-]?key/i;
+
   const redactSettings = (settings: unknown): unknown => {
-    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return settings;
+    if (Array.isArray(settings)) return settings.map(redactSettings);
+    if (!settings || typeof settings !== "object") return settings;
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(settings)) {
-      const lower = key.toLowerCase();
-      if (lower.includes("token") || lower.includes("secret") || lower.includes("password") || lower.includes("apikey")) {
+      if (SECRET_KEY_RE.test(key)) {
         out[key] = null;
-      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      } else if (value && typeof value === "object") {
         out[key] = redactSettings(value);
       } else {
         out[key] = value;
@@ -55,7 +57,7 @@ function redactAgentSecrets(agent: any) {
     try {
       return { ...agent, settings: redactSettings(JSON.parse(agent.settings)) };
     } catch {
-      return agent;
+      return { ...agent, settings: null };
     }
   }
 

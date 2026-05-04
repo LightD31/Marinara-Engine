@@ -21,5 +21,5 @@ export async function seedDefaultConnection(db: DB) {
     return;
   }
 
-  logger.info("[seed] Skipped default OpenRouter Free connection seed because no bundled API key is provided");
+  logger.info("[seed] Skipped default OpenRouter Free connection seed");
 }

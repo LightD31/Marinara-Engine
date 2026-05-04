@@ -44,10 +44,15 @@ async function sha256Base64url(plain: string): Promise<string> {
 
 type ExchangeResult = { ok: true } | { ok: false; status: number; reason: string };
 
+function isEncryptedToken(value: string): boolean {
+  const parts = value.split(":");
+  return parts.length === 3 && parts.every((part) => /^[0-9a-f]+$/i.test(part)) && parts[0]?.length === 24 && parts[2]?.length === 32;
+}
+
 function decryptStoredToken(value: unknown): string {
   if (typeof value !== "string" || !value) return "";
   const decrypted = decryptApiKey(value);
-  return decrypted || value;
+  return decrypted || (isEncryptedToken(value) ? "" : value);
 }
 
 export async function spotifyAuthRoutes(app: FastifyInstance) {
@@ -312,7 +317,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
           ...settings,
           spotifyAccessToken: encryptApiKey(tokens.access_token),
           // Spotify may rotate refresh tokens
-          spotifyRefreshToken: tokens.refresh_token ? encryptApiKey(tokens.refresh_token) : settings.spotifyRefreshToken,
+          spotifyRefreshToken: encryptApiKey(tokens.refresh_token ?? refreshToken),
           spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
         },
       });
