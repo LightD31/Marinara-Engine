@@ -528,9 +528,11 @@ strong {
 
 /* Blockquotes */
 .mari-message-content .mari-md-blockquote {
-  border-left: 3px solid rgba(255, 255, 255, 0.15);
-  padding: 0.15em 0 0.15em 0.75em;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.5rem;
+  padding: 0.5em 0.75em;
   margin: 0.35em 0;
+  background: rgba(255, 255, 255, 0.035);
   color: rgba(255, 255, 255, 0.6);
   font-style: italic;
 }
@@ -1599,10 +1601,8 @@ summary[class*="cursor-pointer"],
 }
 
 .glimmer-name-gradient {
-  background: linear-gradient(135deg, var(--y2k-lavender) 0%, var(--y2k-pink) 50%, var(--y2k-purple) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--y2k-pink);
+  text-shadow: 0 0 12px rgba(var(--y2k-pink-rgb, 255, 143, 171), 0.18);
 }
 
 .glimmer-bubble {
@@ -1840,10 +1840,8 @@ summary[class*="cursor-pointer"],
 }
 
 .rpg-char-name {
-  background: linear-gradient(135deg, #c084fc 0%, #f472b6 50%, #fb923c 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #f0abfc;
+  text-shadow: 0 0 14px rgba(244, 114, 182, 0.18);
 }
 
 .rpg-streaming {

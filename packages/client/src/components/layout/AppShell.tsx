@@ -4,7 +4,13 @@
 import { ChatSidebar } from "./ChatSidebar";
 import { TopBar } from "./TopBar";
 import { ChatNotificationBubbles } from "../chat/ChatNotificationBubbles";
-import { useUIStore } from "../../stores/ui.store";
+import {
+  RIGHT_PANEL_WIDTH_MAX,
+  RIGHT_PANEL_WIDTH_MIN,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  useUIStore,
+} from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useBackgroundAutonomousPolling } from "../../hooks/use-background-autonomous";
 import { useIdleDetection } from "../../hooks/use-idle-detection";
@@ -42,6 +48,10 @@ const RightPanel = lazy(() => import("./RightPanel").then((module) => ({ default
 const OnboardingTutorial = lazy(() =>
   import("../onboarding/OnboardingTutorial").then((module) => ({ default: module.OnboardingTutorial })),
 );
+
+function clampWidth(width: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, width));
+}
 
 function MainPaneFallback() {
   return (
@@ -85,6 +95,12 @@ export function AppShell() {
   const rightPanelWidth = useUIStore((s) => s.rightPanelWidth);
   const setRightPanelWidth = useUIStore((s) => s.setRightPanelWidth);
   const closeRightPanel = useUIStore((s) => s.closeRightPanel);
+  const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
+  const [rightPanelDragWidth, setRightPanelDragWidth] = useState<number | null>(null);
+  const sidebarDragWidthRef = useRef<number | null>(null);
+  const rightPanelDragWidthRef = useRef<number | null>(null);
+  const liveSidebarWidth = sidebarDragWidth ?? sidebarWidth;
+  const liveRightPanelWidth = rightPanelDragWidth ?? rightPanelWidth;
 
   // Track mobile breakpoint for right-panel animation strategy
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
@@ -193,11 +209,18 @@ export function AppShell() {
       const originalUserSelect = document.body.style.userSelect;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
+      sidebarDragWidthRef.current = sidebarWidth;
+      setSidebarDragWidth(sidebarWidth);
 
       const onMove = (moveEvent: MouseEvent) => {
-        setSidebarWidth(moveEvent.clientX);
+        const nextWidth = clampWidth(moveEvent.clientX, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
+        sidebarDragWidthRef.current = nextWidth;
+        setSidebarDragWidth(nextWidth);
       };
       const onUp = () => {
+        setSidebarWidth(sidebarDragWidthRef.current ?? useUIStore.getState().sidebarWidth);
+        sidebarDragWidthRef.current = null;
+        setSidebarDragWidth(null);
         document.body.style.cursor = originalCursor;
         document.body.style.userSelect = originalUserSelect;
         window.removeEventListener("mousemove", onMove);
@@ -207,7 +230,7 @@ export function AppShell() {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [isMobile, setSidebarWidth],
+    [isMobile, setSidebarWidth, sidebarWidth],
   );
 
   const startRightPanelResize = useCallback(
@@ -218,11 +241,18 @@ export function AppShell() {
       const originalUserSelect = document.body.style.userSelect;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
+      rightPanelDragWidthRef.current = rightPanelWidth;
+      setRightPanelDragWidth(rightPanelWidth);
 
       const onMove = (moveEvent: MouseEvent) => {
-        setRightPanelWidth(window.innerWidth - moveEvent.clientX);
+        const nextWidth = clampWidth(window.innerWidth - moveEvent.clientX, RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX);
+        rightPanelDragWidthRef.current = nextWidth;
+        setRightPanelDragWidth(nextWidth);
       };
       const onUp = () => {
+        setRightPanelWidth(rightPanelDragWidthRef.current ?? useUIStore.getState().rightPanelWidth);
+        rightPanelDragWidthRef.current = null;
+        setRightPanelDragWidth(null);
         document.body.style.cursor = originalCursor;
         document.body.style.userSelect = originalUserSelect;
         window.removeEventListener("mousemove", onMove);
@@ -232,7 +262,7 @@ export function AppShell() {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [isMobile, setRightPanelWidth],
+    [isMobile, rightPanelWidth, setRightPanelWidth],
   );
 
   const detailView = regexDetailId ? (
@@ -290,15 +320,15 @@ export function AppShell() {
         data-component="ChatSidebarPanel"
         aria-label="Chat list"
         className={cn(
-          "mari-sidebar flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          "mari-sidebar flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl",
           sidebarOpen && "border-r border-[var(--sidebar-border)]/30",
           // Mobile: fixed overlay
           "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:shadow-2xl max-md:pt-[env(safe-area-inset-top)]",
           !sidebarOpen && "max-md:!w-0",
         )}
-        style={{ width: sidebarOpen ? (isMobile ? "100vw" : sidebarWidth) : 0 }}
+        style={{ width: sidebarOpen ? (isMobile ? "100vw" : liveSidebarWidth) : 0 }}
       >
-        <div className="h-full" style={{ width: isMobile ? "100vw" : sidebarWidth }}>
+        <div className="h-full" style={{ width: isMobile ? "100vw" : liveSidebarWidth }}>
           <ChatSidebar />
         </div>
       </aside>
@@ -309,7 +339,7 @@ export function AppShell() {
           aria-label="Resize left sidebar"
           onMouseDown={startSidebarResize}
           className="absolute inset-y-0 z-20 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--primary)]/30 md:block"
-          style={{ left: sidebarOpen ? sidebarWidth : 0 }}
+          style={{ left: sidebarOpen ? liveSidebarWidth : 0 }}
         />
       )}
 
@@ -361,13 +391,13 @@ export function AppShell() {
           data-component="RightPanelDesktop"
           aria-label="Settings and tools panel"
           className={cn(
-            "mari-right-panel flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+            "mari-right-panel flex-shrink-0 overflow-hidden bg-[var(--background)]/80 backdrop-blur-xl",
             rightPanelOpen && "border-l border-[var(--sidebar-border)]/30",
           )}
-          style={{ width: rightPanelOpen ? rightPanelWidth : 0 }}
+          style={{ width: rightPanelOpen ? liveRightPanelWidth : 0 }}
         >
           {rightPanelOpen && (
-            <div className="h-full" style={{ width: rightPanelWidth }}>
+            <div className="h-full" style={{ width: liveRightPanelWidth }}>
               <Suspense fallback={<SidePanelFallback />}>
                 <RightPanel />
               </Suspense>
@@ -382,7 +412,7 @@ export function AppShell() {
           aria-label="Resize right sidebar"
           onMouseDown={startRightPanelResize}
           className="absolute inset-y-0 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--primary)]/30 md:block"
-          style={{ right: rightPanelOpen ? rightPanelWidth : 0 }}
+          style={{ right: rightPanelOpen ? liveRightPanelWidth : 0 }}
         />
       )}
 
