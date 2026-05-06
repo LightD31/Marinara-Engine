@@ -10,6 +10,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Guides for all modes.
 - QoL improvements to Lorebooks handling.
 - Optional intuitive swipe navigation lets Conversation and Roleplay users move through rerolls with arrow keys or touch swipes, with an opt-in reroll-at-the-end shortcut.
+- Installed extensions now sync to the Marinara server instead of per-browser localStorage, so installs, toggles, and removals carry across devices on the same instance; existing local extensions migrate automatically on first load.
 - Roleplay chats can now optionally let characters create direct-message Conversation chats with hidden `[dm: ...]` commands.
 - Lorebook entries can now be selected in bulk and copied or moved to another lorebook.
 
