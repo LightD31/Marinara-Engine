@@ -4894,12 +4894,19 @@ export async function gameRoutes(app: FastifyInstance) {
 
     const nextMeta = markNpcsMetAtCurrentLocation(withActiveGameMapMeta(meta, updatedMap));
     const hydratedMeta = await buildHydratedGameMeta(chatId, nextMeta);
-    await chats.updateMetadata(chatId, hydratedMeta);
+    // `buildHydratedGameMeta` runs `syncGameMapMetaPartyPosition` against the most recent game state
+    // snapshot — which still records the OLD location until the next /generate run produces a new
+    // snapshot. That sync stomps the explicit move we just persisted, leaving the marker stuck at
+    // the previous node. Re-apply the user's chosen position on top so the explicit move wins.
+    const hydratedActiveMap = (hydratedMeta.gameMap as GameMap | null) ?? updatedMap;
+    const finalMap: GameMap = { ...hydratedActiveMap, partyPosition: position };
+    const finalMeta = withActiveGameMapMeta(hydratedMeta, finalMap);
+    await chats.updateMetadata(chatId, finalMeta);
 
     return {
-      map: (hydratedMeta.gameMap as GameMap) ?? updatedMap,
-      maps: getGameMapsFromMeta(hydratedMeta),
-      activeGameMapId: (hydratedMeta.activeGameMapId as string | null) ?? getGameMapId(hydratedMeta.gameMap as GameMap),
+      map: (finalMeta.gameMap as GameMap) ?? finalMap,
+      maps: getGameMapsFromMeta(finalMeta),
+      activeGameMapId: (finalMeta.activeGameMapId as string | null) ?? getGameMapId(finalMeta.gameMap as GameMap),
     };
   });
 
