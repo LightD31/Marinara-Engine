@@ -29,6 +29,7 @@ type AgentOptions = ConstructorParameters<typeof Agent>[0];
 export interface OutboundUrlPolicy {
   allowLocal?: boolean;
   allowLoopback?: boolean;
+  allowMdns?: boolean;
   allowedProtocols?: string[];
   maxRedirects?: number;
   /**
@@ -223,6 +224,10 @@ function isLoopbackHostname(hostname: string): boolean {
   return LOCALHOST_NAMES.has(normalized) || isLoopbackIp(normalized);
 }
 
+function isMdnsHostname(hostname: string): boolean {
+  return normalizeHostnameForAddress(hostname).replace(/\.$/, "").toLowerCase().endsWith(".local");
+}
+
 export function normalizeLoopbackUrl(url: string | URL): string {
   const parsed = typeof url === "string" ? new URL(url) : new URL(url.toString());
   const normalized = normalizeHostnameForAddress(parsed.hostname).replace(/\.$/, "").toLowerCase();
@@ -248,6 +253,10 @@ function isBlockedResolvedAddress(address: string, policy: OutboundUrlPolicy): b
   return !(policy.allowLoopback && isLoopbackIp(address));
 }
 
+function preferIpv4Records(records: Array<{ address: string; family: 4 | 6 }>): Array<{ address: string; family: 4 | 6 }> {
+  return [...records].sort((a, b) => a.family - b.family);
+}
+
 function flagHint(policy: OutboundUrlPolicy): string {
   if (!policy.flagName) return "";
   return ` Set ${policy.flagName}=true in your .env file to allow this (changes take effect within ~2s without a restart).`;
@@ -265,6 +274,15 @@ async function validateResolvedAddresses(
   originalUrl?: string,
 ): Promise<Array<{ address: string; family: 4 | 6 }>> {
   const addresses = await resolveHostname(hostname);
+  if (policy.allowMdns && isMdnsHostname(hostname)) {
+    const preferred = preferIpv4Records(addresses);
+    if (preferred.length === 0) {
+      const target = originalUrl ?? hostname;
+      throw new Error(`Refused to fetch ${target}: hostname '${hostname}' did not resolve to any address.`);
+    }
+    return preferred;
+  }
+
   if (!policy.allowLocal && addresses.length === 0) {
     // DNS failure (NXDOMAIN, SRV mismatch, etc.). Setting the local-URLs flag
     // wouldn't help here, so don't tell the operator to flip it.
@@ -298,7 +316,11 @@ export async function validateOutboundUrl(url: string | URL, policy: OutboundUrl
   }
 
   if (!policy.allowLocal) {
-    if (isLocalHostname(parsed.hostname) && !(policy.allowLoopback && isLoopbackHostname(parsed.hostname))) {
+    if (
+      isLocalHostname(parsed.hostname) &&
+      !(policy.allowLoopback && isLoopbackHostname(parsed.hostname)) &&
+      !(policy.allowMdns && isMdnsHostname(parsed.hostname))
+    ) {
       // Genuine policy.allowLocal-driven rejection — naming the flag is useful.
       throw new Error(
         `Refused to fetch ${original}: hostname '${parsed.hostname}' is local or reserved.${flagHint(policy)}`,

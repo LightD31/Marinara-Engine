@@ -24,6 +24,7 @@ export function llmFetch(url: string | URL, init?: RequestInit): Promise<Respons
     policy: {
       allowLocal: isProviderLocalUrlsEnabled(),
       allowLoopback: true,
+      allowMdns: true,
       allowedProtocols: ["https:", "http:"],
       flagName: "PROVIDER_LOCAL_URLS_ENABLED",
     },
