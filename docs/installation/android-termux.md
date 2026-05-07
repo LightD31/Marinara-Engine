@@ -17,7 +17,7 @@ pkg update && pkg install -y git nodejs && git clone https://github.com/Pasta-De
 This one-liner:
 
 1. Updates Termux packages
-2. Installs Git and Node.js. Marinara requires Node.js 24 LTS or newer.
+2. Installs Git and Node.js. Marinara requires Node.js 24 LTS or newer; after installation, run `node -v` to confirm Termux installed `v24` or newer.
 3. Clones the Marinara Engine repo
 4. Makes the launcher executable
 5. Runs the Termux launcher for the first time
