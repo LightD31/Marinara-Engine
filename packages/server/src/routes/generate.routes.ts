@@ -2518,6 +2518,7 @@ export async function generateRoutes(app: FastifyInstance) {
         conn.maxContext,
         conn.openrouterProvider,
         conn.maxTokensOverride,
+        conn.claudeFastMode === "true",
       );
 
       // ────────────────────────────────────────
