@@ -215,7 +215,7 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     await storage.remove(req.params.id);
 
     if (linkedCharacterId) {
-      await clearCharacterEmbeddedLorebook(app.db, linkedCharacterId);
+      await clearCharacterEmbeddedLorebook(app.db, linkedCharacterId, req.params.id);
     }
     return reply.status(204).send();
   });

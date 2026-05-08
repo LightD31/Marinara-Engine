@@ -79,10 +79,29 @@ function toCharacterBook(lorebook: LorebookRow, entries: LoreEntryRow[]): Charac
   };
 }
 
+function getEmbeddedLorebookId(characterData: Record<string, unknown>): string | null {
+  const extensions =
+    characterData.extensions && typeof characterData.extensions === "object"
+      ? (characterData.extensions as Record<string, unknown>)
+      : null;
+  const importMetadata =
+    extensions?.importMetadata && typeof extensions.importMetadata === "object"
+      ? (extensions.importMetadata as Record<string, unknown>)
+      : null;
+  const embeddedLorebook =
+    importMetadata?.embeddedLorebook && typeof importMetadata.embeddedLorebook === "object"
+      ? (importMetadata.embeddedLorebook as Record<string, unknown>)
+      : null;
+  return typeof embeddedLorebook?.lorebookId === "string" ? embeddedLorebook.lorebookId : null;
+}
+
 /**
  * Mirror the current state of a standalone lorebook into its source
  * character's `data.character_book`. No-op when the lorebook has no
- * `characterId` (i.e. it is not the imported copy of an embedded lorebook).
+ * `characterId`, or when the character's embedded-lorebook metadata does
+ * not point at this lorebook. Ordinary character-scoped lorebooks also use
+ * `characterId` for auto-activation, but they must not overwrite the V2
+ * embedded `character_book`.
  *
  * Sync errors are logged but never thrown — the user's primary mutation
  * (entry create/update/delete) has already succeeded by the time this is
@@ -99,6 +118,9 @@ export async function syncCharacterBookFromLorebook(db: DB, lorebookId: string):
     const charactersStorage = createCharactersStorage(db);
     const character = await charactersStorage.getById(characterId);
     if (!character) return;
+
+    const currentData = JSON.parse(character.data) as Record<string, unknown>;
+    if (getEmbeddedLorebookId(currentData) !== lorebookId) return;
 
     const entries = (await lorebookStorage.listEntries(lorebookId)) as LoreEntryRow[];
     const nextBook = toCharacterBook(lorebook, entries);
@@ -128,13 +150,15 @@ export async function syncCharacterBookFromLorebook(db: DB, lorebookId: string):
  * subtree explicitly instead of relying on the merge to preserve sibling
  * keys.
  */
-export async function clearCharacterEmbeddedLorebook(db: DB, characterId: string): Promise<void> {
+export async function clearCharacterEmbeddedLorebook(db: DB, characterId: string, lorebookId: string): Promise<void> {
   try {
     const charactersStorage = createCharactersStorage(db);
     const character = await charactersStorage.getById(characterId);
     if (!character) return;
 
     const currentData = JSON.parse(character.data) as Record<string, unknown>;
+    if (getEmbeddedLorebookId(currentData) !== lorebookId) return;
+
     const extensions =
       currentData.extensions && typeof currentData.extensions === "object"
         ? ({ ...(currentData.extensions as Record<string, unknown>) } as Record<string, unknown>)
