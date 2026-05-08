@@ -31,6 +31,7 @@ import { normalizeTimestampOverrides } from "../services/import/import-timestamp
 import { findLastIndex, parseExtra, shouldEnableAgentsForGeneration } from "./generate/generate-route-utils.js";
 
 type TrackerWrapFormat = "xml" | "markdown" | "none";
+type EntryStateOverrides = Record<string, { ephemeral?: number | null; enabled?: boolean }>;
 
 async function loadLatestChatGameSnapshot(app: FastifyInstance, chatId: string) {
   const committedRows = await app.db
@@ -174,6 +175,29 @@ function formatPeekTrackerContextBlock(args: {
     return `<context>\n${trackerParts.map((part) => "    " + part.replace(/\n/g, "\n    ")).join("\n")}\n</context>`;
   }
   return `# Context\n*(Established state as of the last message. Do not re-describe — advance from here.)*\n${trackerParts.join("\n")}`;
+}
+
+function resolveLorebookGenerationTriggers(mode: unknown): string[] {
+  const modeTrigger = mode === "game" ? "game" : typeof mode === "string" && mode.trim() ? mode.trim() : "roleplay";
+  return Array.from(new Set([modeTrigger, "chat"]));
+}
+
+function resolveEntryStateOverrides(value: unknown): EntryStateOverrides | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+
+  const overrides: EntryStateOverrides = {};
+  for (const [entryId, override] of Object.entries(value)) {
+    if (typeof override !== "object" || override === null || Array.isArray(override)) return undefined;
+    const { ephemeral, enabled } = override as Record<string, unknown>;
+    if (ephemeral !== undefined && ephemeral !== null && typeof ephemeral !== "number") return undefined;
+    if (enabled !== undefined && typeof enabled !== "boolean") return undefined;
+    overrides[entryId] = {
+      ...(ephemeral !== undefined ? { ephemeral } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
+    };
+  }
+
+  return overrides;
 }
 
 export async function chatsRoutes(app: FastifyInstance) {
@@ -863,7 +887,7 @@ export async function chatsRoutes(app: FastifyInstance) {
 
     // ── Fallback: live assembly preview (no generation has happened yet) ──
     // This is a best-effort approximation; it won't include runtime-only
-    // injections like lorebooks, game state, scene context, semantic memory, etc.
+    // injections like cached game state, scene context, semantic memory, etc.
     const presetId = chat.mode === "conversation" ? null : (chat.promptPresetId ?? chatMeta.presetId);
     if (presetId) {
       try {
@@ -1027,6 +1051,7 @@ export async function chatsRoutes(app: FastifyInstance) {
             chatId: req.params.id,
           });
           const resolvePromptMacros = (value: string) => resolveMacros(value, promptMacroContext);
+          const entryStateOverrides = resolveEntryStateOverrides(chatMeta.entryStateOverrides);
 
           const assembled = await assemblePrompt({
             db: app.db,
@@ -1049,6 +1074,8 @@ export async function chatsRoutes(app: FastifyInstance) {
             activeLorebookIds: Array.isArray(chatMeta.activeLorebookIds)
               ? (chatMeta.activeLorebookIds as string[])
               : [],
+            entryStateOverrides,
+            generationTriggers: resolveLorebookGenerationTriggers(chat.mode),
             groupScenarioOverrideText:
               typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
                 ? (chatMeta.groupScenarioText as string).trim()
