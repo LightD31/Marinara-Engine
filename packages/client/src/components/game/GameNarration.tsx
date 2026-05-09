@@ -73,6 +73,95 @@ function nameColorStyle(color?: string): CSSProperties | undefined {
   return { color };
 }
 
+function normalizeSpriteExpressionKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^full_/, "")
+    .replace(/[_\s-]+/g, "_");
+}
+
+const GAME_TTS_EMOTIONS = [
+  "neutral",
+  "happy",
+  "sad",
+  "angry",
+  "surprised",
+  "scared",
+  "disgusted",
+  "thinking",
+  "laughing",
+  "crying",
+  "blushing",
+  "smirk",
+  "embarrassed",
+  "determined",
+  "confused",
+  "sleepy",
+] as const;
+
+type GameTtsEmotion = (typeof GAME_TTS_EMOTIONS)[number];
+
+const GAME_TTS_EMOTION_SET = new Set<string>(GAME_TTS_EMOTIONS);
+
+const GAME_TTS_EMOTION_ALIASES: Record<string, GameTtsEmotion> = {
+  afraid: "scared",
+  anger: "angry",
+  amused: "laughing",
+  blush: "blushing",
+  confused_look: "confused",
+  confusion: "confused",
+  cry: "crying",
+  determined_look: "determined",
+  disgust: "disgusted",
+  drowsy: "sleepy",
+  embarrassed_smile: "embarrassed",
+  fear: "scared",
+  fearful: "scared",
+  flustered: "blushing",
+  focused: "determined",
+  grin: "happy",
+  joyful: "happy",
+  laugh: "laughing",
+  nervous: "scared",
+  pensive: "thinking",
+  puzzled: "confused",
+  sad_look: "sad",
+  sadness: "sad",
+  serious: "determined",
+  shocked: "surprised",
+  shy: "blushing",
+  sleep: "sleepy",
+  sleepy_eyes: "sleepy",
+  smile: "happy",
+  smirking: "smirk",
+  sobbing: "crying",
+  startled: "surprised",
+  surprise: "surprised",
+  think: "thinking",
+  tired: "sleepy",
+  worried: "scared",
+};
+
+function normalizeGameTtsEmotion(value?: string | null): GameTtsEmotion | null {
+  const normalized = value ? normalizeSpriteExpressionKey(value) : "";
+  if (!normalized) return null;
+  if (GAME_TTS_EMOTION_SET.has(normalized)) return normalized as GameTtsEmotion;
+  if (GAME_TTS_EMOTION_ALIASES[normalized]) return GAME_TTS_EMOTION_ALIASES[normalized];
+
+  const parts = normalized.split("_").filter(Boolean);
+  for (const part of parts) {
+    if (GAME_TTS_EMOTION_SET.has(part)) return part as GameTtsEmotion;
+    if (GAME_TTS_EMOTION_ALIASES[part]) return GAME_TTS_EMOTION_ALIASES[part];
+  }
+
+  return null;
+}
+
+function resolveGameSegmentTtsEmotion(segment: NarrationSegment): GameTtsEmotion {
+  return normalizeGameTtsEmotion(segment.sprite) ?? (segment.partyType === "thought" ? "thinking" : "neutral");
+}
+
 const PARTY_TYPE_ICONS: Record<string, string> = {
   side: "💬",
   extra: "💬",
@@ -86,6 +175,41 @@ const GAME_DIALOGUE_AVATAR_CLASS =
 type NarrationMessage = Pick<Message, "id" | "chatId" | "role" | "content" | "characterId" | "extra"> & {
   characterName?: string;
 };
+
+const APPROX_MESSAGE_TOKEN_OVERHEAD = 4;
+
+function estimateTextTokenCount(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  const wordEstimate = trimmed.split(/\s+/).filter(Boolean).length * 1.3;
+  const charEstimate = trimmed.length / 4;
+  return Math.ceil(Math.max(wordEstimate, charEstimate));
+}
+
+function estimateMessageTokenCount(message: NarrationMessage): number {
+  const stored = message.extra?.tokenCount;
+  if (typeof stored === "number" && Number.isFinite(stored) && stored > 0) return stored;
+  const textTokens = estimateTextTokenCount(message.content);
+  return textTokens > 0 ? textTokens + APPROX_MESSAGE_TOKEN_OVERHEAD : 0;
+}
+
+function estimateSessionHistoryTokens(messages: NarrationMessage[]): number {
+  let startIndex = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.extra?.isConversationStart) {
+      startIndex = i;
+      break;
+    }
+  }
+  return messages.slice(startIndex).reduce((total, message) => total + estimateMessageTokenCount(message), 0);
+}
+
+function formatTokenEstimate(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}m`;
+  if (tokens >= 10_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return tokens.toLocaleString();
+}
 
 interface NarrationSegment {
   id: string;
@@ -249,6 +373,8 @@ interface GameNarrationProps {
   onNpcPortraitClick?: (npcName: string) => void;
   /** Pause auto-play while a blocking game overlay is open. */
   autoPlayBlocked?: boolean;
+  /** Pause voice-over while a blocking game overlay is open. Defaults to autoPlayBlocked. */
+  voicePlaybackBlocked?: boolean;
   /** Effective game-mode TTS playback volume, 0–1. */
   gameVoiceVolume?: number;
   /**
@@ -411,8 +537,8 @@ function buildVoiceLineTextCacheKey(
   return `game-voice-line-v1:${rawKey.length}:${hashVoiceKey(rawKey)}`;
 }
 
-function buildVoiceLineSegmentCacheKey(segmentVoiceKey: string, jobIndex: number): string {
-  return `game-voice-line-v2:${segmentVoiceKey}:${jobIndex}`;
+function buildVoiceLineSegmentCacheKey(segmentVoiceKey: string, jobIndex: number, textCacheKey: string): string {
+  return `game-voice-line-v3:${segmentVoiceKey}:${jobIndex}:${hashVoiceKey(textCacheKey)}`;
 }
 
 function buildGameVoiceAudioJobs(
@@ -431,10 +557,11 @@ function buildGameVoiceAudioJobs(
         tone: request.tone,
         voice: request.voice,
       };
+      const textCacheKey = buildVoiceLineTextCacheKey(config, job);
       return {
         ...job,
-        cacheKey: buildVoiceLineSegmentCacheKey(key, jobIndex),
-        textCacheKey: buildVoiceLineTextCacheKey(config, job),
+        cacheKey: buildVoiceLineSegmentCacheKey(key, jobIndex, textCacheKey),
+        textCacheKey,
       };
     }),
   );
@@ -488,10 +615,11 @@ async function generateGameVoiceJobBlob(job: GameVoiceAudioJob, controller: Abor
 }
 
 function findNpcVoiceHint(speaker: string | null | undefined, gameNpcs: GameNpc[]) {
-  const normalizedSpeaker = speaker?.trim().toLowerCase();
-  if (!normalizedSpeaker) return null;
+  const speakerName = speaker?.trim();
+  if (!speakerName) return null;
+  const normalizedSpeaker = speakerName.toLowerCase();
   const npc = gameNpcs.find((candidate) => candidate.name.trim().toLowerCase() === normalizedSpeaker);
-  if (!npc) return null;
+  if (!npc) return { name: speakerName };
   return { name: npc.name, description: npc.description, gender: npc.gender, pronouns: npc.pronouns, notes: npc.notes };
 }
 
@@ -507,9 +635,7 @@ function getGameSegmentVoiceRequest(
     if (!ttsConfigMatchesSpeaker(config, segment.speaker)) return null;
     const chunks = splitTTSChunks(segment.content);
     if (chunks.length === 0) return null;
-    const tone = [segment.sprite, segment.partyType && segment.partyType !== "main" ? segment.partyType : null]
-      .filter(Boolean)
-      .join(", ");
+    const tone = resolveGameSegmentTtsEmotion(segment);
     const voice = resolveTTSVoiceForSpeaker(
       config,
       segment.speaker,
@@ -520,7 +646,7 @@ function getGameSegmentVoiceRequest(
     return {
       chunks,
       speaker: segment.speaker,
-      tone: tone || undefined,
+      tone,
       voice,
     };
   }
@@ -678,6 +804,7 @@ export function GameNarration({
   onReadable,
   onNpcPortraitClick,
   autoPlayBlocked,
+  voicePlaybackBlocked,
   gameVoiceVolume = 1,
   onInterruptRequest,
   onInterruptCancel,
@@ -829,19 +956,39 @@ export function GameNarration({
     [gameNpcs],
   );
 
+  const nonNpcSpeakerNames = useMemo(() => {
+    const names = new Set(["you", "player", "narrator", "gm", "game master", "system", "assistant", "story"]);
+    for (const [, character] of activeCharacterEntries) {
+      if (character.name.trim()) names.add(character.name.trim().toLowerCase());
+    }
+    if (personaInfo?.name?.trim()) names.add(personaInfo.name.trim().toLowerCase());
+    return names;
+  }, [activeCharacterEntries, personaInfo]);
+
   const canUploadNpcPortrait = useCallback(
     (speaker?: string | null) => {
-      const normalizedSpeaker = speaker?.trim().toLowerCase();
-      return !!normalizedSpeaker && !!onNpcPortraitClick && uploadableNpcNames.has(normalizedSpeaker);
+      const speakerName = speaker?.trim();
+      const normalizedSpeaker = speakerName?.toLowerCase();
+      if (!speakerName || !normalizedSpeaker || !onNpcPortraitClick) return false;
+      if (uploadableNpcNames.has(normalizedSpeaker)) return true;
+      if (nonNpcSpeakerNames.has(normalizedSpeaker)) return false;
+      return (
+        speakerName.length <= 48 &&
+        /^\p{Lu}/u.test(speakerName) &&
+        !/[<>{}"“”]/u.test(speakerName) &&
+        !speakerName.includes("[") &&
+        !speakerName.includes("]")
+      );
     },
-    [onNpcPortraitClick, uploadableNpcNames],
+    [nonNpcSpeakerNames, onNpcPortraitClick, uploadableNpcNames],
   );
 
   const triggerNpcPortraitUpload = useCallback(
     (speaker?: string | null) => {
       if (!speaker || !onNpcPortraitClick) return;
-      const normalizedSpeaker = speaker.trim().toLowerCase();
-      if (!uploadableNpcNames.has(normalizedSpeaker)) return;
+      const speakerName = speaker.trim();
+      const normalizedSpeaker = speakerName.toLowerCase();
+      if (!uploadableNpcNames.has(normalizedSpeaker) && !/^\p{Lu}/u.test(speakerName)) return;
       onNpcPortraitClick(speaker);
     },
     [onNpcPortraitClick, uploadableNpcNames],
@@ -1334,6 +1481,7 @@ export function GameNarration({
   const gameVoiceEnabled = Boolean(ttsConfig?.enabled && ttsConfig.autoplayGame);
   const gameVoiceConfigSignature = useMemo(() => buildVoiceConfigSignature(ttsConfig), [ttsConfig]);
   const normalizedGameVoiceVolume = Math.max(0, Math.min(1, gameVoiceVolume));
+  const gameVoicePlaybackBlocked = voicePlaybackBlocked ?? autoPlayBlocked;
 
   const stopGameVoicePlayback = useCallback(() => {
     gameVoiceSequenceRef.current += 1;
@@ -1768,6 +1916,7 @@ export function GameNarration({
     [logEntries, visibleLogCount],
   );
   const hiddenLogCount = Math.max(0, logEntries.length - visibleLogEntries.length);
+  const sessionHistoryTokens = useMemo(() => estimateSessionHistoryTokens(messages), [messages]);
   const loadOlderLogs = useCallback(() => {
     setVisibleLogCount((current) => Math.min(logEntries.length, current + logPageSize));
   }, [logEntries.length, logPageSize]);
@@ -2109,6 +2258,29 @@ export function GameNarration({
       .map((line, index) => getVoiceKeyForSideLine(active, line, index))
       .filter((key): key is string => Boolean(key));
   }, [active, activeSideLines, getVoiceKeyForSideLine]);
+  const autoPlayVoiceBlocked = (() => {
+    if (!gameVoiceEnabled || generationFailed) return false;
+
+    if (activeVoiceKey) {
+      const entry = gameVoiceCacheRef.current.get(activeVoiceKey);
+      if (!entry || entry.status === "loading") return true;
+      if (entry.status === "ready") {
+        if (gameVoicePlayingKey === activeVoiceKey) return true;
+        if (lastAutoPlayedVoiceKeyRef.current !== activeVoiceKey) return true;
+      }
+    }
+
+    if (activeSideVoiceKeys.length > 0) {
+      const groupKey = activeSideVoiceKeys.join("|");
+      const entries = activeSideVoiceKeys.map((key) => gameVoiceCacheRef.current.get(key));
+      if (entries.some((entry) => !entry || entry.status === "loading")) return true;
+      if (activeSideVoiceKeys.includes(gameVoicePlayingKey ?? "")) return true;
+      const hasPlayableSideVoice = entries.some((entry) => entry?.status === "ready");
+      if (hasPlayableSideVoice && lastAutoPlayedSideVoiceGroupRef.current !== groupKey) return true;
+    }
+
+    return false;
+  })();
 
   useEffect(() => {
     lastAutoPlayedVoiceKeyRef.current = null;
@@ -2117,13 +2289,24 @@ export function GameNarration({
   }, [activeIndex, activeVoiceKey, stopGameVoicePlayback]);
 
   useEffect(() => {
-    if (gameVoiceEnabled && !isStreaming && !scenePreparing && !directionsActive && !autoPlayBlocked) return;
+    if (gameVoiceEnabled && !isStreaming && !scenePreparing && !directionsActive && !gameVoicePlaybackBlocked) return;
+    if (isStreaming || scenePreparing || directionsActive || gameVoicePlaybackBlocked) {
+      lastAutoPlayedVoiceKeyRef.current = null;
+      lastAutoPlayedSideVoiceGroupRef.current = null;
+    }
     stopGameVoicePlayback();
-  }, [autoPlayBlocked, directionsActive, gameVoiceEnabled, isStreaming, scenePreparing, stopGameVoicePlayback]);
+  }, [
+    directionsActive,
+    gameVoiceEnabled,
+    gameVoicePlaybackBlocked,
+    isStreaming,
+    scenePreparing,
+    stopGameVoicePlayback,
+  ]);
 
   useEffect(() => {
     if (!gameVoiceEnabled || !activeVoiceKey) return;
-    if (isStreaming || scenePreparing || directionsActive || autoPlayBlocked) return;
+    if (isStreaming || scenePreparing || directionsActive || gameVoicePlaybackBlocked) return;
     if (lastAutoPlayedVoiceKeyRef.current === activeVoiceKey) return;
     const entry = gameVoiceCacheRef.current.get(activeVoiceKey);
     if (!entry || entry.status !== "ready") return;
@@ -2131,9 +2314,9 @@ export function GameNarration({
     playGameVoiceKey(activeVoiceKey);
   }, [
     activeVoiceKey,
-    autoPlayBlocked,
     directionsActive,
     gameVoiceEnabled,
+    gameVoicePlaybackBlocked,
     gameVoiceVersion,
     isStreaming,
     playGameVoiceKey,
@@ -2142,7 +2325,7 @@ export function GameNarration({
 
   useEffect(() => {
     if (!gameVoiceEnabled || activeSideVoiceKeys.length === 0) return;
-    if (!doneTyping || isStreaming || scenePreparing || directionsActive || autoPlayBlocked) return;
+    if (!doneTyping || isStreaming || scenePreparing || directionsActive || gameVoicePlaybackBlocked) return;
 
     const sideVoiceGroupKey = activeSideVoiceKeys.join("|");
     if (lastAutoPlayedSideVoiceGroupRef.current === sideVoiceGroupKey) return;
@@ -2165,10 +2348,10 @@ export function GameNarration({
   }, [
     activeVoiceKey,
     activeSideVoiceKeys,
-    autoPlayBlocked,
     directionsActive,
     doneTyping,
     gameVoiceEnabled,
+    gameVoicePlaybackBlocked,
     gameVoicePlayingKey,
     gameVoiceVersion,
     isStreaming,
@@ -2389,6 +2572,7 @@ export function GameNarration({
     if (!active || !doneTyping) return;
     if (isStreaming || partyTurnPending || scenePreparing || directionsActive) return;
     if (autoPlayBlocked) return;
+    if (autoPlayVoiceBlocked) return;
     if (editingContent !== null) return;
     if (activeIndex >= segments.length - 1) return; // reached input; stop
     const id = window.setTimeout(() => {
@@ -2410,35 +2594,45 @@ export function GameNarration({
     scenePreparing,
     directionsActive,
     autoPlayBlocked,
+    autoPlayVoiceBlocked,
     editingContent,
     getSegmentStartVisibleChars,
     playClickSfx,
   ]);
 
+  const resolveExpressionAvatar = useCallback(
+    (speaker?: string, expression?: string): SpeakerAvatarInfo | null => {
+      if (!speaker || !expression || !spriteMap) return null;
+
+      const sprites = findNamedMapValue(spriteMap, speaker);
+      if (!sprites?.length) return null;
+
+      const exprKey = normalizeSpriteExpressionKey(expression);
+      const expressionSprites = sprites.filter((s) => !s.expression.toLowerCase().startsWith("full_"));
+      if (!expressionSprites.length) return null;
+
+      const exact = expressionSprites.find((s) => normalizeSpriteExpressionKey(s.expression) === exprKey);
+      if (exact) return { url: exact.url };
+
+      const partial = expressionSprites.find((s) => {
+        const spriteKey = normalizeSpriteExpressionKey(s.expression);
+        return spriteKey.includes(exprKey) || exprKey.includes(spriteKey);
+      });
+      if (partial) return { url: partial.url };
+
+      return { url: expressionSprites[0]!.url };
+    },
+    [spriteMap],
+  );
+
   const activeAvatar = useMemo<SpeakerAvatarInfo | null>(() => {
     if (!active || active.type !== "dialogue" || !active.speaker) return null;
-    // Try to resolve a sprite image matching the expression (exclude full-body sprites for avatar)
-    if (active.sprite && spriteMap) {
-      const sprites = findNamedMapValue(spriteMap, active.speaker);
-      if (sprites?.length) {
-        const exprLower = active.sprite.toLowerCase();
-        // Only consider expression sprites (not full-body) for the dialogue avatar
-        const expressionSprites = sprites.filter((s) => !s.expression.toLowerCase().startsWith("full_"));
-        if (expressionSprites.length) {
-          const exact = expressionSprites.find((s) => s.expression.toLowerCase() === exprLower);
-          if (exact) return { url: exact.url };
-          const partial = expressionSprites.find(
-            (s) => s.expression.toLowerCase().includes(exprLower) || exprLower.includes(s.expression.toLowerCase()),
-          );
-          if (partial) return { url: partial.url };
-          // If no matching expression found, use the first available expression sprite
-          return { url: expressionSprites[0]!.url };
-        }
-      }
-    }
+    const expressionAvatar = resolveExpressionAvatar(active.speaker, active.sprite);
+    if (expressionAvatar) return expressionAvatar;
+
     // Fall back to base avatar
     return findNamedMapValue(speakerAvatarInfos, active.speaker) ?? null;
-  }, [active, speakerAvatarInfos, spriteMap]);
+  }, [active, resolveExpressionAvatar, speakerAvatarInfos]);
 
   const NARRATION_ACTION_BTN =
     "flex items-center gap-1.5 rounded-lg bg-[var(--muted)]/30 px-3 py-1.5 text-xs text-[var(--foreground)]/70 transition-colors hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)] dark:bg-white/10 dark:text-white/70 dark:hover:bg-white/20 dark:hover:text-white";
@@ -2773,9 +2967,13 @@ export function GameNarration({
 
         {/* Side remarks — small floating box shown with the dialogue they follow */}
         {activeSideLines.length > 0 && doneTyping && (
-          <div className="mb-2 flex w-full flex-col space-y-1.5">
+          <div className="relative z-20 mb-2 flex w-full flex-col space-y-1.5">
             {activeSideLines.map((line, i) => {
-              const charAvatar = findNamedMapValue(speakerAvatarInfos, line.character) ?? null;
+              const expressionAvatar =
+                line.type === "side" || line.type === "extra"
+                  ? resolveExpressionAvatar(line.character, line.expression)
+                  : null;
+              const charAvatar = expressionAvatar ?? findNamedMapValue(speakerAvatarInfos, line.character) ?? null;
               const charColor = findNamedMapValue(speakerColors, line.character);
               const charNameColor = findNamedMapValue(speakerNameColors, line.character);
               return (
@@ -3310,6 +3508,12 @@ export function GameNarration({
                 {logEntries.length > 0 && (
                   <p className="text-[0.65rem] text-white/45">
                     Showing {visibleLogEntries.length} of {logEntries.length}
+                    {sessionHistoryTokens > 0 && (
+                      <span title="Approximate tokens in the current session's loaded chat history.">
+                        {" | ~"}
+                        {formatTokenEstimate(sessionHistoryTokens)} tokens
+                      </span>
+                    )}
                   </p>
                 )}
               </div>
@@ -3858,17 +4062,17 @@ function PartyOverlayBox({
   nameColor?: string;
 }) {
   const styleByType: Record<string, { border: string; bg: string; icon: string; labelColor: string }> = {
-    side: { border: "border-white/15", bg: "bg-black/50", icon: "💬", labelColor: "text-white/85" },
-    extra: { border: "border-white/15", bg: "bg-black/50", icon: "💬", labelColor: "text-white/85" },
-    thought: { border: "border-purple-400/20", bg: "bg-purple-500/8", icon: "💭", labelColor: "text-purple-200/80" },
-    whisper: { border: "border-rose-400/20", bg: "bg-rose-500/8", icon: "🤫", labelColor: "text-rose-200/80" },
+    side: { border: "border-white/15", bg: "bg-black/75", icon: "💬", labelColor: "text-white/85" },
+    extra: { border: "border-white/15", bg: "bg-black/75", icon: "💬", labelColor: "text-white/85" },
+    thought: { border: "border-purple-400/20", bg: "bg-purple-950/70", icon: "💭", labelColor: "text-purple-200/80" },
+    whisper: { border: "border-rose-400/20", bg: "bg-rose-950/70", icon: "🤫", labelColor: "text-rose-200/80" },
   };
   const style = styleByType[line.type] ?? styleByType.side!;
 
   return (
     <div
       className={cn(
-        "flex w-fit min-w-0 max-w-full items-start gap-2 rounded-xl border px-3 py-2 backdrop-blur-md sm:max-w-[75%]",
+        "isolate flex w-fit min-w-0 max-w-full transform-gpu items-start gap-2 rounded-xl border bg-clip-padding px-3 py-2 sm:max-w-[75%]",
         (line.type === "side" || line.type === "extra") && "shadow-[0_16px_38px_rgba(0,0,0,0.45)]",
         style.border,
         style.bg,

@@ -23,6 +23,12 @@ export const DEFAULT_GAME_BACKGROUND_SIZE: ImageGenerationSize = { width: 1024, 
 export const DEFAULT_GAME_PORTRAIT_SIZE: ImageGenerationSize = { width: 512, height: 512 };
 export const GENERATED_GAME_BACKGROUND_EXTS = ["png", "jpg", "jpeg", "webp", "avif", "gif"] as const;
 const GAME_BACKGROUND_EXT_SET = new Set<string>(GENERATED_GAME_BACKGROUND_EXTS);
+const GAME_PORTRAIT_NEGATIVE_PROMPT =
+  "text, letters, captions, subtitles, UI, watermark, logo, signature, speech bubble, split screen, panel, collage, contact sheet, grid, four portraits, multiple portraits, duplicated face, extra head, extra person, bad anatomy, low quality";
+const GAME_BACKGROUND_NEGATIVE_PROMPT =
+  "text, letters, captions, subtitles, UI, watermark, logo, signature, people, character, portrait, split screen, panel, collage, contact sheet, grid, multiple frames, low quality";
+const GAME_ILLUSTRATION_NEGATIVE_PROMPT =
+  "text, letters, captions, subtitles, UI, watermark, logo, signature, speech bubble, split screen, panel, collage, contact sheet, character sheet, grid, four images, duplicated face, extra head, unrelated character, bad anatomy, low quality";
 
 // sharp is optional in the server package. Generated game backgrounds should be
 // stored at the VN canvas ratio when possible, but generation must still work on
@@ -255,6 +261,7 @@ export async function generateNpcPortrait(req: NpcPortraitRequest): Promise<stri
       req.imgSource || req.imgService || "",
       {
         prompt,
+        negativePrompt: GAME_PORTRAIT_NEGATIVE_PROMPT,
         model: req.imgModel,
         width: size.width,
         height: size.height,
@@ -328,6 +335,8 @@ export interface SceneIllustrationGenRequest {
   genre?: string;
   setting?: string;
   artStyle?: string;
+  /** Extra user instructions appended to scene illustration prompts. */
+  imagePromptInstructions?: string;
   referenceImages?: string[];
   imgSource?: string | null;
   imgModel: string;
@@ -359,6 +368,9 @@ export async function buildBackgroundImagePrompt(req: BackgroundGenRequest): Pro
 export async function buildSceneIllustrationImagePrompt(req: SceneIllustrationGenRequest): Promise<string> {
   if (req.promptOverride?.trim()) return req.promptOverride.trim().slice(0, 2200);
   const styleHint = [req.artStyle, req.genre, req.setting].filter(Boolean).join(", ");
+  const imagePromptInstructionsLine = req.imagePromptInstructions?.trim()
+    ? `User image instructions: ${req.imagePromptInstructions.trim().replace(/\s+/g, " ").slice(0, 1200)}`
+    : "";
   const sceneIllustrationVars = {
     scenePrompt: req.prompt,
     narrativePurposeLine: req.reason ? `Narrative purpose: ${req.reason}.` : "",
@@ -370,11 +382,16 @@ export async function buildSceneIllustrationImagePrompt(req: SceneIllustrationGe
       ? `Appearance notes for visible characters without an attached reference image:\n- ${req.characterDescriptions.join("\n- ")}`
       : "",
     artDirectionLine: styleHint ? `Art direction: ${styleHint}.` : "",
+    imagePromptInstructionsLine,
   };
   const rawIllustrationPrompt = req.promptOverridesStorage
     ? await loadPrompt(req.promptOverridesStorage, GAME_SCENE_ILLUSTRATION, sceneIllustrationVars)
     : GAME_SCENE_ILLUSTRATION.defaultBuilder(sceneIllustrationVars);
-  return rawIllustrationPrompt.slice(0, 2200);
+  const finalPrompt =
+    imagePromptInstructionsLine && !rawIllustrationPrompt.includes(imagePromptInstructionsLine)
+      ? `${rawIllustrationPrompt}\n${imagePromptInstructionsLine}`
+      : rawIllustrationPrompt;
+  return finalPrompt.slice(0, 2200);
 }
 
 /**
@@ -416,6 +433,7 @@ export async function generateBackground(req: BackgroundGenRequest): Promise<str
       req.imgSource || req.imgService || "",
       {
         prompt,
+        negativePrompt: GAME_BACKGROUND_NEGATIVE_PROMPT,
         model: req.imgModel,
         width: size.width,
         height: size.height,
@@ -473,6 +491,7 @@ export async function generateSceneIllustration(req: SceneIllustrationGenRequest
       req.imgSource || req.imgService || "",
       {
         prompt,
+        negativePrompt: GAME_ILLUSTRATION_NEGATIVE_PROMPT,
         model: req.imgModel,
         width: size.width,
         height: size.height,

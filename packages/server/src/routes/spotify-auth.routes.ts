@@ -1,12 +1,20 @@
 // ──────────────────────────────────────────────
 // Routes: Spotify OAuth (PKCE)
 // ──────────────────────────────────────────────
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import crypto from "node:crypto";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { buildSpotifyRedirectUri } from "../config/runtime-config.js";
 import { logger } from "../lib/logger.js";
-import { decryptApiKey, encryptApiKey } from "../utils/crypto.js";
+import { encryptApiKey } from "../utils/crypto.js";
+import {
+  decryptStoredToken,
+  fetchSpotifyApi,
+  resolveSpotifyCredentials,
+  SPOTIFY_SCOPES,
+  spotifyHasScope,
+} from "../services/spotify/spotify.service.js";
+import { composeDjMariPlaylist, DjMariPlaylistError } from "../services/spotify/dj-mari-playlist.service.js";
 
 // In-flight PKCE verifiers keyed by state param (short-lived, cleaned up on callback)
 const pendingAuth = new Map<
@@ -15,13 +23,6 @@ const pendingAuth = new Map<
 >();
 
 const AUTH_TTL_MS = 10 * 60_000;
-
-const SPOTIFY_SCOPES = [
-  "user-modify-playback-state",
-  "user-read-playback-state",
-  "playlist-read-private",
-  "user-library-read",
-].join(" ");
 
 function htmlEscape(str: string): string {
   return str
@@ -44,20 +45,78 @@ async function sha256Base64url(plain: string): Promise<string> {
 
 type ExchangeResult = { ok: true } | { ok: false; status: number; reason: string };
 
-function isEncryptedToken(value: string): boolean {
-  const parts = value.split(":");
-  return (
-    parts.length === 3 &&
-    parts.every((part) => /^[0-9a-f]+$/i.test(part)) &&
-    parts[0]?.length === 24 &&
-    parts[2]?.length === 32
-  );
+type SpotifyPlaybackItem = {
+  id?: string;
+  uri?: string;
+  name?: string;
+  duration_ms?: number;
+  type?: string;
+  artists?: Array<{ name?: string }>;
+  album?: { name?: string; images?: Array<{ url?: string; width?: number; height?: number }> };
+};
+
+type SpotifyPlaybackResponse = {
+  is_playing?: boolean;
+  progress_ms?: number | null;
+  repeat_state?: string;
+  shuffle_state?: boolean;
+  smart_shuffle?: boolean;
+  item?: SpotifyPlaybackItem | null;
+  device?: {
+    id?: string | null;
+    name?: string;
+    type?: string;
+    volume_percent?: number | null;
+    is_active?: boolean;
+  } | null;
+};
+
+function mapPlayback(data: SpotifyPlaybackResponse | null) {
+  if (!data) return { connected: true, active: false };
+  const item = data.item ?? null;
+  return {
+    connected: true,
+    active: true,
+    isPlaying: data.is_playing === true,
+    shuffle: data.shuffle_state === true,
+    smartShuffle: data.smart_shuffle === true,
+    repeat: data.repeat_state === "track" || data.repeat_state === "context" ? data.repeat_state : "off",
+    progressMs: typeof data.progress_ms === "number" ? data.progress_ms : null,
+    durationMs: typeof item?.duration_ms === "number" ? item.duration_ms : null,
+    item: item
+      ? {
+          id: item.id ?? null,
+          uri: item.uri ?? null,
+          name: item.name ?? "Unknown track",
+          type: item.type ?? "track",
+          artists: (item.artists ?? []).map((artist) => artist.name).filter(Boolean),
+          album: item.album?.name ?? null,
+          imageUrl: item.album?.images?.[0]?.url ?? null,
+        }
+      : null,
+    device: data.device
+      ? {
+          id: data.device.id ?? null,
+          name: data.device.name ?? "Spotify device",
+          type: data.device.type ?? null,
+          volume: typeof data.device.volume_percent === "number" ? data.device.volume_percent : null,
+          isActive: data.device.is_active === true,
+        }
+      : null,
+  };
 }
 
-function decryptStoredToken(value: unknown): string {
-  if (typeof value !== "string" || !value) return "";
-  const decrypted = decryptApiKey(value);
-  return decrypted || (isEncryptedToken(value) ? "" : value);
+async function readSpotifyError(res: Response, fallback: string) {
+  const text = await res.text().catch(() => "");
+  if (!text.trim()) return fallback;
+  try {
+    const json = JSON.parse(text) as { error?: { message?: string } | string };
+    if (typeof json.error === "string") return json.error;
+    if (typeof json.error?.message === "string") return json.error.message;
+  } catch {
+    /* use text fallback */
+  }
+  return text.slice(0, 300);
 }
 
 export async function spotifyAuthRoutes(app: FastifyInstance) {
@@ -69,6 +128,15 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
     for (const [key, entry] of pendingAuth) {
       if (now - entry.createdAt > AUTH_TTL_MS) pendingAuth.delete(key);
     }
+  }
+
+  async function getCredentialsOrReply(reply: FastifyReply, agentId?: string | null) {
+    const result = await resolveSpotifyCredentials(storage, { agentId });
+    if ("error" in result) {
+      reply.status(result.status).send({ error: result.error });
+      return null;
+    }
+    return result;
   }
 
   /** Exchange code for tokens and persist them. Shared by /callback and /exchange. */
@@ -133,6 +201,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
           spotifyRefreshToken: encryptApiKey(tokens.refresh_token),
           spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
           spotifyClientId: clientId,
+          spotifyScope: tokens.scope,
         },
       });
 
@@ -315,6 +384,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
         access_token: string;
         refresh_token?: string;
         expires_in: number;
+        scope?: string;
       };
 
       await storage.update(agentId, {
@@ -324,6 +394,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
           // Spotify may rotate refresh tokens
           spotifyRefreshToken: encryptApiKey(tokens.refresh_token ?? refreshToken),
           spotifyExpiresAt: Date.now() + tokens.expires_in * 1000,
+          spotifyScope: tokens.scope ?? settings.spotifyScope,
         },
       });
 
@@ -351,13 +422,261 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
     const hasRefresh = !!decryptStoredToken(settings.spotifyRefreshToken);
     const expiresAt = (settings.spotifyExpiresAt as number) ?? 0;
     const isExpired = expiresAt > 0 && Date.now() > expiresAt;
+    const scopeText = typeof settings.spotifyScope === "string" ? settings.spotifyScope : "";
+    const scopes = scopeText.split(/\s+/).filter(Boolean);
 
     return {
       connected: hasToken && hasRefresh,
       expired: isExpired,
       clientId: (settings.spotifyClientId as string) ?? null,
       redirectUri: buildSpotifyRedirectUri(req as FastifyRequest),
+      scopes,
+      missingScopes: scopeText ? SPOTIFY_SCOPES.split(/\s+/).filter((scope) => !scopes.includes(scope)) : [],
     };
+  });
+
+  /**
+   * GET /api/spotify/access-token?agentId=xxx
+   * Returns a short-lived user access token for the browser-only Web Playback SDK.
+   */
+  app.get<{ Querystring: { agentId?: string } }>("/access-token", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.query.agentId ?? null);
+    if (!credentials) return;
+
+    return {
+      accessToken: credentials.accessToken,
+      expiresAt: credentials.expiresAt,
+      agentId: credentials.agentId,
+      scopes: credentials.scopes,
+      hasStreamingScope: spotifyHasScope(credentials.scopes, "streaming"),
+    };
+  });
+
+  /**
+   * GET /api/spotify/player
+   * Current playback state for the global mini player.
+   */
+  app.get<{ Querystring: { agentId?: string } }>("/player", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.query.agentId ?? null);
+    if (!credentials) return;
+
+    const res = await fetchSpotifyApi(credentials, "/me/player");
+    if (res.status === 204) return mapPlayback(null);
+    if (!res.ok) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify playback state failed") });
+    }
+    return mapPlayback((await res.json()) as SpotifyPlaybackResponse);
+  });
+
+  app.get<{ Querystring: { agentId?: string } }>("/devices", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.query.agentId ?? null);
+    if (!credentials) return;
+
+    const res = await fetchSpotifyApi(credentials, "/me/player/devices");
+    if (!res.ok) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify devices failed") });
+    }
+    const data = (await res.json()) as {
+      devices?: Array<{
+        id?: string | null;
+        name?: string;
+        type?: string;
+        is_active?: boolean;
+        volume_percent?: number | null;
+      }>;
+    };
+    return {
+      devices: (data.devices ?? []).map((device) => ({
+        id: device.id ?? null,
+        name: device.name ?? "Spotify device",
+        type: device.type ?? null,
+        isActive: device.is_active === true,
+        volume: typeof device.volume_percent === "number" ? device.volume_percent : null,
+      })),
+    };
+  });
+
+  app.get<{ Querystring: { limit?: string; agentId?: string } }>("/playlists", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.query.agentId ?? null);
+    if (!credentials) return;
+
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit ?? 50)));
+    const res = await fetchSpotifyApi(credentials, `/me/playlists?${new URLSearchParams({ limit: String(limit) })}`);
+    if (!res.ok) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify playlists failed") });
+    }
+    const data = (await res.json()) as {
+      items?: Array<{ id?: string; name?: string; uri?: string; tracks?: { total?: number } }>;
+    };
+    return {
+      playlists: (data.items ?? []).map((playlist) => ({
+        id: playlist.id ?? "",
+        name: playlist.name ?? "Untitled playlist",
+        uri: playlist.uri ?? "",
+        trackCount: playlist.tracks?.total ?? 0,
+      })),
+    };
+  });
+
+  app.post<{ Body: { agentId?: string; deviceId?: string | null } }>("/dj-mari-playlist", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const requiredScopes = [
+      "user-read-private",
+      "playlist-modify-private",
+      "user-library-read",
+      "user-modify-playback-state",
+    ];
+    const missingScopes = requiredScopes.filter((scope) => !spotifyHasScope(credentials.scopes, scope));
+    if (missingScopes.length > 0) {
+      return reply.status(400).send({
+        error: `Reconnect Spotify to let DJ Mari create playlists. Missing scopes: ${missingScopes.join(", ")}`,
+        missingScopes,
+      });
+    }
+
+    try {
+      return await composeDjMariPlaylist({ db: app.db, credentials, deviceId: req.body?.deviceId ?? null });
+    } catch (err) {
+      if (err instanceof DjMariPlaylistError) {
+        return reply.status(err.status).send({ error: err.message });
+      }
+      logger.error(err, "DJ Mari playlist creation failed");
+      return reply.status(500).send({ error: err instanceof Error ? err.message : "DJ Mari playlist creation failed" });
+    }
+  });
+
+  app.put<{
+    Body: { agentId?: string; deviceId?: string | null; uri?: string; uris?: string[]; contextUri?: string };
+  }>("/player/play", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const query = req.body?.deviceId ? `?${new URLSearchParams({ device_id: req.body.deviceId })}` : "";
+    const body: Record<string, unknown> = {};
+    if (typeof req.body?.contextUri === "string" && req.body.contextUri.startsWith("spotify:")) {
+      body.context_uri = req.body.contextUri;
+    } else if (Array.isArray(req.body?.uris) && req.body.uris.length > 0) {
+      body.uris = req.body.uris.filter((uri) => typeof uri === "string" && uri.startsWith("spotify:"));
+    } else if (typeof req.body?.uri === "string" && req.body.uri.startsWith("spotify:")) {
+      body.uris = [req.body.uri];
+    }
+
+    const res = await fetchSpotifyApi(credentials, `/me/player/play${query}`, {
+      method: "PUT",
+      body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok && res.status !== 204) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify play failed") });
+    }
+    return { success: true };
+  });
+
+  app.put<{ Body: { agentId?: string; deviceId?: string | null } }>("/player/pause", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const query = req.body?.deviceId ? `?${new URLSearchParams({ device_id: req.body.deviceId })}` : "";
+    const res = await fetchSpotifyApi(credentials, `/me/player/pause${query}`, { method: "PUT" });
+    if (!res.ok && res.status !== 204) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify pause failed") });
+    }
+    return { success: true };
+  });
+
+  app.post<{ Body: { agentId?: string; deviceId?: string | null } }>("/player/next", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const query = req.body?.deviceId ? `?${new URLSearchParams({ device_id: req.body.deviceId })}` : "";
+    const res = await fetchSpotifyApi(credentials, `/me/player/next${query}`, { method: "POST" });
+    if (!res.ok && res.status !== 204) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify next failed") });
+    }
+    return { success: true };
+  });
+
+  app.post<{ Body: { agentId?: string; deviceId?: string | null } }>("/player/previous", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const query = req.body?.deviceId ? `?${new URLSearchParams({ device_id: req.body.deviceId })}` : "";
+    const res = await fetchSpotifyApi(credentials, `/me/player/previous${query}`, { method: "POST" });
+    if (!res.ok && res.status !== 204) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify previous failed") });
+    }
+    return { success: true };
+  });
+
+  app.put<{ Body: { agentId?: string; volume: number; deviceId?: string | null } }>(
+    "/player/volume",
+    async (req, reply) => {
+      const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+      if (!credentials) return;
+
+      const volume = Math.max(0, Math.min(100, Math.round(Number(req.body?.volume ?? 50))));
+      const params = new URLSearchParams({ volume_percent: String(volume) });
+      if (req.body?.deviceId) params.set("device_id", req.body.deviceId);
+      const res = await fetchSpotifyApi(credentials, `/me/player/volume?${params.toString()}`, { method: "PUT" });
+      if (!res.ok && res.status !== 204) {
+        return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify volume failed") });
+      }
+      return { success: true, volume };
+    },
+  );
+
+  app.put<{ Body: { agentId?: string; enabled: boolean; deviceId?: string | null } }>(
+    "/player/shuffle",
+    async (req, reply) => {
+      const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+      if (!credentials) return;
+
+      const params = new URLSearchParams({ state: req.body?.enabled === true ? "true" : "false" });
+      if (req.body?.deviceId) params.set("device_id", req.body.deviceId);
+      const res = await fetchSpotifyApi(credentials, `/me/player/shuffle?${params.toString()}`, { method: "PUT" });
+      if (!res.ok && res.status !== 204) {
+        return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify shuffle failed") });
+      }
+      return { success: true, shuffle: req.body?.enabled === true };
+    },
+  );
+
+  app.put<{ Body: { agentId?: string; state: "off" | "track" | "context"; deviceId?: string | null } }>(
+    "/player/repeat",
+    async (req, reply) => {
+      const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+      if (!credentials) return;
+
+      const state = req.body?.state;
+      if (state !== "off" && state !== "track" && state !== "context") {
+        return reply.status(400).send({ error: "repeat state must be off, track, or context" });
+      }
+
+      const params = new URLSearchParams({ state });
+      if (req.body?.deviceId) params.set("device_id", req.body.deviceId);
+      const res = await fetchSpotifyApi(credentials, `/me/player/repeat?${params.toString()}`, { method: "PUT" });
+      if (!res.ok && res.status !== 204) {
+        return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify repeat failed") });
+      }
+      return { success: true, repeat: state };
+    },
+  );
+
+  app.put<{ Body: { agentId?: string; deviceId: string; play?: boolean } }>("/player/transfer", async (req, reply) => {
+    const credentials = await getCredentialsOrReply(reply, req.body?.agentId ?? null);
+    if (!credentials) return;
+
+    const deviceId = req.body?.deviceId;
+    if (!deviceId) return reply.status(400).send({ error: "deviceId is required" });
+    const res = await fetchSpotifyApi(credentials, "/me/player", {
+      method: "PUT",
+      body: JSON.stringify({ device_ids: [deviceId], play: req.body?.play === true }),
+    });
+    if (!res.ok && res.status !== 204) {
+      return reply.status(res.status).send({ error: await readSpotifyError(res, "Spotify transfer failed") });
+    }
+    return { success: true };
   });
 
   /**

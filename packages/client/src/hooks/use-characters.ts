@@ -136,11 +136,39 @@ export interface SpriteInfo {
   url: string;
 }
 
+export type SpriteCleanupEngine = "auto" | "backgroundremover" | "builtin";
+
 export interface SpriteCapabilities {
   imageProcessingAvailable: boolean;
   spriteGenerationAvailable: boolean;
   backgroundRemovalAvailable: boolean;
   reason: string | null;
+  backgroundRemover?: {
+    engine: SpriteCleanupEngine;
+    installed: boolean;
+    command: string | null;
+    source: "env" | "local" | "path" | null;
+    runtimeDir: string;
+    reason: string | null;
+  };
+}
+
+export interface SpriteCleanupResult {
+  processed: number;
+  failed: Array<{ expression: string; error: string }>;
+  backupId?: string | null;
+  engine?: SpriteCleanupEngine;
+  backgroundRemoverProcessed?: number;
+  builtinProcessed?: number;
+  sprites: SpriteInfo[];
+  error?: string;
+}
+
+export interface SpriteCleanupRestoreResult {
+  restored: number;
+  failed: Array<{ expression: string; error: string }>;
+  sprites: SpriteInfo[];
+  error?: string;
 }
 
 export interface CharacterGalleryImage {
@@ -193,6 +221,37 @@ export function useDeleteSprite() {
   return useMutation({
     mutationFn: ({ characterId, expression }: { characterId: string; expression: string }) =>
       api.delete(`/sprites/${characterId}/${expression}`),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: spriteKeys.list(variables.characterId) });
+    },
+  });
+}
+
+export function useCleanupSavedSprites() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      characterId,
+      expressions,
+      cleanupStrength = 35,
+      engine = "auto",
+    }: {
+      characterId: string;
+      expressions?: string[];
+      cleanupStrength?: number;
+      engine?: SpriteCleanupEngine;
+    }) => api.post<SpriteCleanupResult>(`/sprites/${characterId}/cleanup-saved`, { expressions, cleanupStrength, engine }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: spriteKeys.list(variables.characterId) });
+    },
+  });
+}
+
+export function useRestoreSpriteCleanupBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ characterId, backupId }: { characterId: string; backupId: string }) =>
+      api.post<SpriteCleanupRestoreResult>(`/sprites/${characterId}/cleanup-restore`, { backupId }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: spriteKeys.list(variables.characterId) });
     },

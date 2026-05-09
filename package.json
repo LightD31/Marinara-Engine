@@ -27,6 +27,8 @@
     "test": "node ./scripts/check-windows-installer-layout.mjs && pnpm -r run test",
     "version:sync": "node ./scripts/sync-version.mjs",
     "version:check": "node ./scripts/check-version-drift.mjs",
+    "backgroundremover:install": "node ./scripts/install-backgroundremover.mjs",
+    "backgroundremover:reinstall": "node ./scripts/install-backgroundremover.mjs --reinstall",
     "guard:installer-artifacts": "node ./scripts/check-tracked-installers.mjs",
     "release:notes": "node ./scripts/render-release-notes.mjs",
     "clean": "pnpm -r --if-present run clean && node ./scripts/clean-workspace.mjs"

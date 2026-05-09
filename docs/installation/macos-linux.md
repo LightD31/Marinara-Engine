@@ -68,6 +68,29 @@ File-backed storage is prepared automatically on first server start.
 
 > `pnpm start` binds to `127.0.0.1` by default. To allow LAN access, set `HOST=0.0.0.0` in `.env` first.
 
+## Optional AI Sprite Background Removal
+
+Marinara can use the open-source [`backgroundremover`](https://github.com/nadermx/backgroundremover) Python tool for stronger transparent sprite cleanup. This is optional because it installs PyTorch and downloads U2Net models.
+
+Install it once from the repo root:
+
+```bash
+pnpm backgroundremover:install
+```
+
+The installer creates a local Python venv under `DATA_DIR/background-remover` and Marinara will use it automatically for sprite cleanup. On macOS, Python 3.11 is the safest choice because `backgroundremover` depends on packages with native wheels:
+
+```bash
+brew install python@3.11
+pnpm backgroundremover:install
+```
+
+To let the shell launcher install it automatically on first launch, set this in `.env`:
+
+```bash
+BACKGROUNDREMOVER_AUTO_INSTALL=true
+```
+
 ## Accessing from Another Device
 
 Want to use Marinara Engine from your phone, tablet, or another computer? See the [FAQ — LAN access](../FAQ.md#how-do-i-access-marinara-engine-from-my-phone-or-another-device) guide.

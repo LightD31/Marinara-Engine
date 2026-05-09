@@ -165,6 +165,16 @@ if [ ! -d "node_modules" ]; then
     run_pnpm install
 fi
 
+# ── Optional AI sprite background remover ──
+BACKGROUNDREMOVER_AUTO_INSTALL_VALUE="${BACKGROUNDREMOVER_AUTO_INSTALL:-false}"
+BACKGROUNDREMOVER_AUTO_INSTALL_NORMALIZED=$(printf '%s' "$BACKGROUNDREMOVER_AUTO_INSTALL_VALUE" | tr '[:upper:]' '[:lower:]')
+case "$BACKGROUNDREMOVER_AUTO_INSTALL_NORMALIZED" in
+  1|true|yes|on)
+    echo "  [..] Ensuring optional AI background remover runtime..."
+    run_pnpm backgroundremover:install -- --if-missing || echo "  [WARN] Optional background remover install failed; built-in cleanup will still work."
+    ;;
+esac
+
 # ── Build if needed ──
 if [ ! -d "packages/shared/dist" ]; then
     echo "  [..] Building shared types..."

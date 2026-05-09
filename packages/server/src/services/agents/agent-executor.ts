@@ -122,7 +122,9 @@ export async function executeAgent(
     const messages =
       config.type === "expression"
         ? buildExpressionAgentMessages(template, context)
-        : buildStandardAgentMessages(config, template, context);
+        : config.type === "spotify" && context.chatMode === "game"
+          ? buildGameSpotifyAgentMessages(template, context)
+          : buildStandardAgentMessages(config, template, context);
 
     // Agents use lower temperature for reliability
     const temperature = (config.settings.temperature as number) ?? 0.3;
@@ -640,6 +642,62 @@ function findLatestAssistantMessage(context: AgentContext): { index: number; con
   return null;
 }
 
+function findLatestUserMessage(context: AgentContext): { index: number; content: string } | null {
+  for (let index = context.recentMessages.length - 1; index >= 0; index--) {
+    const message = context.recentMessages[index]!;
+    if (message.role === "user" && message.content.trim()) {
+      return { index, content: message.content };
+    }
+  }
+  return null;
+}
+
+function buildGameSpotifyAgentMessages(template: string, context: AgentContext): ChatMessage[] {
+  const systemParts: string[] = [];
+  systemParts.push(`<role>`);
+  systemParts.push(`You are a specialized Spotify DJ agent for the current game turn.`);
+  systemParts.push(`</role>`);
+  systemParts.push(``);
+  systemParts.push(buildLoreBlock(context));
+  systemParts.push(``);
+  systemParts.push(`<agents>`);
+  systemParts.push(`Fulfill the requested task here and return the output in the format specified:`);
+  systemParts.push(template);
+  systemParts.push(`</agents>`);
+
+  const extras = buildAgentExtras(context, ["spotify"]);
+  if (extras) {
+    systemParts.push(``);
+    systemParts.push(extras);
+  }
+
+  const latestUser = findLatestUserMessage(context);
+  const latestGameTurn = context.mainResponse?.trim() || findLatestAssistantMessage(context)?.content || "";
+  const userParts: string[] = [];
+
+  if (latestUser?.content) {
+    userParts.push(`<last_user_input>`);
+    userParts.push(truncateAgentText(latestUser.content, 2000));
+    userParts.push(`</last_user_input>`);
+    userParts.push(``);
+  }
+
+  if (latestGameTurn) {
+    userParts.push(`<last_game_turn>`);
+    userParts.push(truncateAgentText(latestGameTurn, 5000));
+    userParts.push(`</last_game_turn>`);
+    userParts.push(``);
+  }
+
+  userParts.push(`Pick music for this game turn only. Use tools to inspect playback and fetch/search candidate tracks.`);
+  userParts.push(`Now return the requested format.`);
+
+  return [
+    { role: "system", content: systemParts.join("\n"), contextKind: "prompt" },
+    { role: "user", content: userParts.join("\n"), contextKind: "history" },
+  ];
+}
+
 function buildExpressionAgentMessages(template: string, context: AgentContext): ChatMessage[] {
   const systemParts: string[] = [];
   systemParts.push(`<role>`);
@@ -947,6 +1005,12 @@ function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): str
     if (context.memory._currentBackground) {
       parts.push(`<current_background>${context.memory._currentBackground}</current_background>`);
     }
+  }
+
+  if (agentTypes.includes("spotify") && context.memory._spotifyDjConstraints) {
+    parts.push(`<spotify_dj_constraints>`);
+    parts.push(JSON.stringify(context.memory._spotifyDjConstraints));
+    parts.push(`</spotify_dj_constraints>`);
   }
 
   if (context.memory._existingLorebookEntries) {

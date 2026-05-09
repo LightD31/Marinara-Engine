@@ -3,10 +3,15 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { existsSync, mkdirSync, createReadStream, readdirSync, unlinkSync, statSync, readFileSync } from "fs";
-import { writeFile, mkdir, readdir, unlink } from "fs/promises";
+import { randomUUID } from "crypto";
+import { writeFile, mkdir, readdir, unlink, copyFile, rm } from "fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "path";
 import { fileURLToPath } from "url";
 import { DATA_DIR } from "../utils/data-dir.js";
+import {
+  getBackgroundRemoverStatus,
+  tryRemoveBackgroundWithBackgroundRemover,
+} from "../services/image/background-remover.service.js";
 
 // sharp is an optional dependency — native prebuilds don't exist for all platforms
 // (e.g. Android/Termux). Lazy-load so the server boots even when sharp is missing;
@@ -69,6 +74,24 @@ const SPRITES_ROOT = join(DATA_DIR, "sprites");
 const ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(ROUTE_DIR, "../../../client/public");
 const CLIENT_DIST_DIR = resolve(ROUTE_DIR, "../../../client/dist");
+const SPRITE_FILE_RE = /\.(png|jpg|jpeg|gif|webp|avif|svg)$/i;
+const CLEANUP_INPUT_FILE_RE = /\.(png|jpg|jpeg|webp|avif)$/i;
+
+type SpriteCleanupEngine = "auto" | "backgroundremover" | "builtin";
+type UsedSpriteCleanupEngine = "backgroundremover" | "builtin";
+
+interface SpriteCleanupBackupEntry {
+  expression: string;
+  originalFilename: string;
+  cleanedFilename: string;
+  backupFilename: string;
+}
+
+interface SpriteCleanupBackupManifest {
+  id: string;
+  createdAt: string;
+  entries: SpriteCleanupBackupEntry[];
+}
 
 function ensureDir(dir: string) {
   if (!existsSync(dir)) {
@@ -80,6 +103,170 @@ function isOpenAIGptImageModel(model?: string): boolean {
   return !!model && /^gpt-image-(?:1|1\.5|2)(?:$|-)/i.test(model.trim());
 }
 
+function resolveSpriteSheetCanvas({
+  cols,
+  rows,
+  spriteType,
+  model,
+}: {
+  cols: number;
+  rows: number;
+  spriteType?: string;
+  model?: string;
+}) {
+  const preferredCellWidth = 512;
+  const preferredCellHeight = spriteType === "full-body" ? 768 : 512;
+  const requestedSheetWidth = cols * preferredCellWidth;
+  const requestedSheetHeight = rows * preferredCellHeight;
+
+  if (!isOpenAIGptImageModel(model)) {
+    return {
+      sheetWidth: requestedSheetWidth,
+      sheetHeight: requestedSheetHeight,
+      cellWidth: preferredCellWidth,
+      cellHeight: preferredCellHeight,
+    };
+  }
+
+  const ratio = requestedSheetWidth / Math.max(1, requestedSheetHeight);
+  const sheetWidth = ratio > 1.12 ? 1536 : 1024;
+  const sheetHeight = ratio > 1.12 ? 1024 : ratio < 0.88 ? 1536 : 1024;
+
+  return {
+    sheetWidth,
+    sheetHeight,
+    cellWidth: Math.floor(sheetWidth / cols),
+    cellHeight: Math.floor(sheetHeight / rows),
+  };
+}
+
+const NATIVE_TRANSPARENT_PNG_PROMPT = "no background, png format";
+const CLEANUP_FRIENDLY_MATTE_FALLBACK =
+  "If transparent output is unsupported, use a perfectly flat pure white #ffffff " +
+  "background with no shadows, gradients, scenery, floor line, or texture behind the character";
+const CLEANUP_FRIENDLY_TRANSPARENT_PNG_PROMPT =
+  `${NATIVE_TRANSPARENT_PNG_PROMPT}. ${CLEANUP_FRIENDLY_MATTE_FALLBACK}`;
+
+function shouldUseCleanupFriendlyTransparentPrompt(model?: string): boolean {
+  return !!model && /^gpt-image-2(?:$|-)/i.test(model.trim());
+}
+
+function applyNativeTransparentPngPrompt(prompt: string, cleanupFriendly = false): string {
+  const replacement = cleanupFriendly ? CLEANUP_FRIENDLY_TRANSPARENT_PNG_PROMPT : NATIVE_TRANSPARENT_PNG_PROMPT;
+  const updated = prompt
+    .replace(/\bsolid white studio background\b/gi, replacement)
+    .replace(/\bsolid white background\b/gi, replacement)
+    .replace(/\bplain white background\b/gi, replacement)
+    .replace(/\bwhite studio background\b/gi, replacement)
+    .replace(/\bwhite background\b/gi, replacement);
+
+  if (updated !== prompt) {
+    return updated;
+  }
+  if (/\bno background\b/i.test(updated)) {
+    return cleanupFriendly && !/flat pure white/i.test(updated)
+      ? `${updated}. ${CLEANUP_FRIENDLY_MATTE_FALLBACK}`
+      : updated;
+  }
+  return `${updated}, ${replacement}`;
+}
+
+function formatSpriteLabelForPrompt(label: string): string {
+  return label.trim().replace(/[_-]+/g, " ");
+}
+
+function normalizeSpriteExpression(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_");
+}
+
+function normalizeSpriteCleanupEngine(raw: unknown): SpriteCleanupEngine {
+  if (typeof raw !== "string") return "auto";
+  const value = raw.trim().toLowerCase();
+  if (value === "backgroundremover" || value === "background-remover" || value === "ai") return "backgroundremover";
+  if (value === "builtin" || value === "built-in" || value === "matte" || value === "white") return "builtin";
+  return "auto";
+}
+
+function isSafeBackupId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9-]+$/i.test(value) && !value.includes("..");
+}
+
+function listSpriteInfos(characterId: string) {
+  const dir = join(SPRITES_ROOT, characterId);
+  ensureDir(dir);
+
+  try {
+    return readdirSync(dir)
+      .filter((f) => SPRITE_FILE_RE.test(f))
+      .map((f) => {
+        const ext = extname(f);
+        const expression = f.slice(0, -ext.length);
+        const mtime = statSync(join(dir, f)).mtimeMs;
+        return {
+          expression,
+          filename: f,
+          url: `/api/sprites/${characterId}/file/${encodeURIComponent(f)}?v=${Math.floor(mtime)}`,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+function buildFullBodyExpressionSheetPrompt({
+  cols,
+  rows,
+  expressions,
+  appearance,
+  sheetWidth,
+  sheetHeight,
+  cellWidth,
+  cellHeight,
+}: {
+  cols: number;
+  rows: number;
+  expressions: string[];
+  appearance: string;
+  sheetWidth: number;
+  sheetHeight: number;
+  cellWidth: number;
+  cellHeight: number;
+}): string {
+  const cellCount = cols * rows;
+  const readableExpressions = expressions.map(formatSpriteLabelForPrompt);
+  const fillerCount = Math.max(0, cellCount - readableExpressions.length);
+
+  return [
+    `full-body character expression sprite sheet source image, designed to be sliced into cells,`,
+    `target output canvas is ${sheetWidth}x${sheetHeight} pixels, with each cell exactly ${cellWidth}x${cellHeight} pixels,`,
+    `strict ${cols} columns by ${rows} rows grid, exactly ${cellCount} equally sized tall rectangular cells,`,
+    `all vertical grid cuts are evenly spaced every ${cellWidth} pixels and all horizontal grid cuts every ${cellHeight} pixels,`,
+    `solid white background, thin straight borders or clean gutters separating every cell,`,
+    `same character in every cell, same outfit, same proportions, same scale, consistent art style,`,
+    `first ${readableExpressions.length} cells left-to-right top-to-bottom must match these facial expressions while keeping the same relaxed standing idle pose: ${readableExpressions.join(", ")},`,
+    fillerCount > 0
+      ? `fill the remaining ${fillerCount} cells with neutral relaxed standing idle filler sprites; filler cells are ignored after slicing,`
+      : undefined,
+    `${appearance},`,
+    `each cell shows one complete full-body character from head to toe, centered upright, feet visible, no cropping,`,
+    `the character must use no more than 78% of the cell height; leave at least 10% empty padding above the head and 12% empty padding below the feet inside every cell,`,
+    `feet and shoes must be clearly above the bottom border or gutter, especially in the final row, never touching or cut by the cell edge,`,
+    `keep every sprite fully inside its own cell; no hair, feet, clothing, weapons, shadows, or effects may cross into another cell,`,
+    `only the face and mood change between the expression cells; body pose stays idle and relaxed,`,
+    `do not create action, walking, running, attack, casting, combat, jumping, sitting, or victory poses,`,
+    `leave enough whitespace around each full-body sprite so feet, hair, weapons, and hands are fully visible inside that cell,`,
+    `do not make one single large full-body image, do not make a poster, comic page, collage, diagonal layout, or merged composition,`,
+    `all cells same size, perfectly aligned, no overlapping, no merged cells, no blank cells,`,
+    `the final image must stop after row ${rows}; do not draw bonus rows, bonus poses, or extra characters,`,
+    `no text, no labels, no numbers, no captions, no watermark`,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
 function clampByte(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
@@ -88,11 +275,31 @@ function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+type RgbColor = { red: number; green: number; blue: number };
+
+function rgbLuma(color: RgbColor): number {
+  return color.red * 0.2126 + color.green * 0.7152 + color.blue * 0.0722;
+}
+
+function rgbSpread(color: RgbColor): number {
+  return Math.max(color.red, color.green, color.blue) - Math.min(color.red, color.green, color.blue);
+}
+
+function rgbDistance(a: RgbColor, b: RgbColor): number {
+  return Math.hypot(a.red - b.red, a.green - b.green, a.blue - b.blue);
+}
+
+function medianNumber(values: number[], fallback: number): number {
+  if (values.length === 0) return fallback;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? fallback;
+}
+
 /**
  * Remove the border-connected white matte and decontaminate edge pixels.
  * This keeps internal whites intact while cleaning the generated backdrop halo.
  */
-async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50): Promise<Buffer> {
+async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 35): Promise<Buffer> {
   const sharp = await getSharp();
   const { data, info } = await sharp(input).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
 
@@ -112,45 +319,95 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
   let queueStart = 0;
   let queueEnd = 0;
 
-  const hardCutoff = 10 + (strength / 100) * 24;
-  const softCutoff = hardCutoff + 18 + (strength / 100) * 20;
-  const minChannelFloor = 248 - (strength / 100) * 23;
-  const spreadLimit = 7 + (strength / 100) * 18;
   const transparentAlpha = 4;
 
   const pixelOffset = (pixelIndex: number) => pixelIndex * channels;
 
-  const whiteDistance = (pixelIndex: number): number => {
+  const readPixel = (pixelIndex: number): RgbColor => {
     const offset = pixelOffset(pixelIndex);
-    const red = rgba[offset] ?? 255;
-    const green = rgba[offset + 1] ?? 255;
-    const blue = rgba[offset + 2] ?? 255;
-    return Math.hypot(255 - red, 255 - green, 255 - blue);
+    return {
+      red: rgba[offset] ?? 255,
+      green: rgba[offset + 1] ?? 255,
+      blue: rgba[offset + 2] ?? 255,
+    };
   };
 
-  const isWhiteMatteCandidate = (pixelIndex: number, distanceCutoff: number, floorOffset = 0, spreadOffset = 0) => {
+  const estimateMatteColor = (): RgbColor => {
+    const samples: RgbColor[] = [];
+    const step = Math.max(1, Math.floor(Math.min(width, height) / 96));
+    const acceptSample = (pixelIndex: number) => {
+      const offset = pixelOffset(pixelIndex);
+      const alpha = rgba[offset + 3] ?? 255;
+      if (alpha <= transparentAlpha) return;
+
+      const color = readPixel(pixelIndex);
+      if (rgbLuma(color) < 172 - strength * 0.18 || rgbSpread(color) > 38 + strength * 0.3) return;
+      samples.push(color);
+    };
+
+    for (let xPos = 0; xPos < width; xPos += step) {
+      acceptSample(xPos);
+      acceptSample((height - 1) * width + xPos);
+    }
+    for (let yPos = 0; yPos < height; yPos += step) {
+      acceptSample(yPos * width);
+      acceptSample(yPos * width + width - 1);
+    }
+
+    return {
+      red: medianNumber(samples.map((sample) => sample.red), 255),
+      green: medianNumber(samples.map((sample) => sample.green), 255),
+      blue: medianNumber(samples.map((sample) => sample.blue), 255),
+    };
+  };
+
+  const matteColor = estimateMatteColor();
+  const matteLuma = rgbLuma(matteColor);
+  const hardCutoff = 14 + (strength / 100) * 32;
+  const softCutoff = hardCutoff + 30 + (strength / 100) * 42;
+  const haloCutoff = softCutoff + 12 + (strength / 100) * 18;
+  const lumaFloor = Math.max(178, matteLuma - (30 + strength * 0.46));
+  const spreadLimit = 18 + (strength / 100) * 38;
+
+  const matteDistance = (pixelIndex: number): number => rgbDistance(readPixel(pixelIndex), matteColor);
+
+  const isMatteCandidate = (pixelIndex: number, distanceCutoff: number, floorOffset = 0, spreadOffset = 0) => {
     const offset = pixelOffset(pixelIndex);
-    const red = rgba[offset] ?? 255;
-    const green = rgba[offset + 1] ?? 255;
-    const blue = rgba[offset + 2] ?? 255;
     const alpha = rgba[offset + 3] ?? 255;
 
     if (alpha <= transparentAlpha) return true;
 
-    const minChannel = Math.min(red, green, blue);
-    const maxChannel = Math.max(red, green, blue);
-    if (minChannel < minChannelFloor + floorOffset || maxChannel - minChannel > spreadLimit + spreadOffset) {
+    const color = readPixel(pixelIndex);
+    if (rgbLuma(color) < lumaFloor + floorOffset || rgbSpread(color) > spreadLimit + spreadOffset) {
       return false;
     }
 
-    return whiteDistance(pixelIndex) <= distanceCutoff;
+    return matteDistance(pixelIndex) <= distanceCutoff;
+  };
+
+  const markMatte = (pixelIndex: number) => {
+    if (matteMask[pixelIndex]) return;
+    matteMask[pixelIndex] = 1;
+    queue[queueEnd++] = pixelIndex;
   };
 
   const enqueueMatte = (pixelIndex: number) => {
     if (matteMask[pixelIndex]) return;
-    if (!isWhiteMatteCandidate(pixelIndex, softCutoff)) return;
-    matteMask[pixelIndex] = 1;
-    queue[queueEnd++] = pixelIndex;
+    if (!isMatteCandidate(pixelIndex, softCutoff)) return;
+    markMatte(pixelIndex);
+  };
+
+  const drainMatteQueue = () => {
+    while (queueStart < queueEnd) {
+      const pixelIndex = queue[queueStart++]!;
+      const xPos = pixelIndex % width;
+      const yPos = Math.floor(pixelIndex / width);
+
+      if (xPos > 0) enqueueMatte(pixelIndex - 1);
+      if (xPos < width - 1) enqueueMatte(pixelIndex + 1);
+      if (yPos > 0) enqueueMatte(pixelIndex - width);
+      if (yPos < height - 1) enqueueMatte(pixelIndex + width);
+    }
   };
 
   for (let xPos = 0; xPos < width; xPos++) {
@@ -162,16 +419,100 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
     enqueueMatte(yPos * width + width - 1);
   }
 
-  while (queueStart < queueEnd) {
-    const pixelIndex = queue[queueStart++]!;
+  drainMatteQueue();
+
+  const innerCutoff = Math.max(hardCutoff + 12, softCutoff * 0.88);
+  const strictLineCutoff = Math.min(innerCutoff, hardCutoff + 22);
+  const rowMatteCounts = new Uint32Array(height);
+  const colMatteCounts = new Uint32Array(width);
+  const isStrictMatteCandidate = (pixelIndex: number) => isMatteCandidate(pixelIndex, strictLineCutoff, 10, -8);
+
+  for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex++) {
+    if (matteMask[pixelIndex] || !isStrictMatteCandidate(pixelIndex)) continue;
     const xPos = pixelIndex % width;
     const yPos = Math.floor(pixelIndex / width);
-
-    if (xPos > 0) enqueueMatte(pixelIndex - 1);
-    if (xPos < width - 1) enqueueMatte(pixelIndex + 1);
-    if (yPos > 0) enqueueMatte(pixelIndex - width);
-    if (yPos < height - 1) enqueueMatte(pixelIndex + width);
+    rowMatteCounts[yPos] = (rowMatteCounts[yPos] ?? 0) + 1;
+    colMatteCounts[xPos] = (colMatteCounts[xPos] ?? 0) + 1;
   }
+
+  const broadRowThreshold = width * 0.34;
+  const broadColThreshold = height * 0.34;
+  for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex++) {
+    if (matteMask[pixelIndex] || !isStrictMatteCandidate(pixelIndex)) continue;
+    const xPos = pixelIndex % width;
+    const yPos = Math.floor(pixelIndex / width);
+    if ((rowMatteCounts[yPos] ?? 0) >= broadRowThreshold || (colMatteCounts[xPos] ?? 0) >= broadColThreshold) {
+      markMatte(pixelIndex);
+    }
+  }
+
+  drainMatteQueue();
+
+  const innerVisited = new Uint8Array(pixelCount);
+  const componentQueue = new Int32Array(pixelCount);
+  const componentPixels = new Int32Array(pixelCount);
+  const minComponentPixels = Math.max(180, pixelCount * (0.003 + ((100 - strength) / 100) * 0.004));
+  const isInnerMatteCandidate = (pixelIndex: number) => isMatteCandidate(pixelIndex, innerCutoff, 8, -8);
+
+  for (let startIndex = 0; startIndex < pixelCount; startIndex++) {
+    if (innerVisited[startIndex] || matteMask[startIndex] || !isInnerMatteCandidate(startIndex)) continue;
+
+    let componentStart = 0;
+    let componentEnd = 0;
+    let componentCount = 0;
+    let minX = width;
+    let maxX = 0;
+    let minY = height;
+    let maxY = 0;
+
+    innerVisited[startIndex] = 1;
+    componentQueue[componentEnd++] = startIndex;
+
+    while (componentStart < componentEnd) {
+      const pixelIndex = componentQueue[componentStart++]!;
+      componentPixels[componentCount++] = pixelIndex;
+
+      const xPos = pixelIndex % width;
+      const yPos = Math.floor(pixelIndex / width);
+      minX = Math.min(minX, xPos);
+      maxX = Math.max(maxX, xPos);
+      minY = Math.min(minY, yPos);
+      maxY = Math.max(maxY, yPos);
+
+      const visitNeighbor = (neighborIndex: number) => {
+        if (innerVisited[neighborIndex] || matteMask[neighborIndex] || !isInnerMatteCandidate(neighborIndex)) return;
+        innerVisited[neighborIndex] = 1;
+        componentQueue[componentEnd++] = neighborIndex;
+      };
+
+      if (xPos > 0) visitNeighbor(pixelIndex - 1);
+      if (xPos < width - 1) visitNeighbor(pixelIndex + 1);
+      if (yPos > 0) visitNeighbor(pixelIndex - width);
+      if (yPos < height - 1) visitNeighbor(pixelIndex + width);
+    }
+
+    const componentWidth = maxX - minX + 1;
+    const componentHeight = maxY - minY + 1;
+    const componentBoxArea = componentWidth * componentHeight;
+    const fillRatio = componentCount / Math.max(1, componentBoxArea);
+    const sizeRatio = componentCount / pixelCount;
+    const boxRatio = componentBoxArea / pixelCount;
+    const spansCell = componentWidth >= width * 0.14 || componentHeight >= height * 0.14;
+    const touchesInnerFrame =
+      minX <= width * 0.12 || maxX >= width * 0.88 || minY <= height * 0.12 || maxY >= height * 0.88;
+    const panelLike =
+      fillRatio >= 0.3 && boxRatio >= 0.02 && spansCell && (touchesInnerFrame || sizeRatio >= 0.02);
+    const hugeOpenArea = sizeRatio >= 0.035 && fillRatio >= 0.14 && spansCell;
+    const largeMattePanel = componentCount >= minComponentPixels && (panelLike || hugeOpenArea);
+
+    if (!largeMattePanel) continue;
+
+    for (let i = 0; i < componentCount; i++) {
+      markMatte(componentPixels[i]!);
+    }
+  }
+
+  drainMatteQueue();
 
   const findForegroundNeighborColor = (pixelIndex: number) => {
     const xPos = pixelIndex % width;
@@ -191,7 +532,7 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
         if (sampleX < 0 || sampleX >= width) continue;
 
         const sampleIndex = sampleY * width + sampleX;
-        if (matteMask[sampleIndex] || isWhiteMatteCandidate(sampleIndex, softCutoff, -12, 8)) continue;
+        if (matteMask[sampleIndex] || isMatteCandidate(sampleIndex, haloCutoff, -18, 14)) continue;
 
         const sampleOffset = pixelOffset(sampleIndex);
         const alpha = rgba[sampleOffset + 3] ?? 255;
@@ -225,28 +566,29 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
 
     const xPos = pixelIndex % width;
     const yPos = Math.floor(pixelIndex / width);
-    let matteNeighbors = 0;
+    let matteNeighborWeight = 0;
 
-    for (let yOffset = -1; yOffset <= 1; yOffset++) {
+    for (let yOffset = -2; yOffset <= 2; yOffset++) {
       const sampleY = yPos + yOffset;
       if (sampleY < 0 || sampleY >= height) continue;
 
-      for (let xOffset = -1; xOffset <= 1; xOffset++) {
+      for (let xOffset = -2; xOffset <= 2; xOffset++) {
         if (xOffset === 0 && yOffset === 0) continue;
         const sampleX = xPos + xOffset;
         if (sampleX < 0 || sampleX >= width) continue;
-        matteNeighbors += matteMask[sampleY * width + sampleX] ?? 0;
+        if (!matteMask[sampleY * width + sampleX]) continue;
+        matteNeighborWeight += 1 / Math.max(1, Math.hypot(xOffset, yOffset));
       }
     }
 
-    if (matteNeighbors === 0 || !isWhiteMatteCandidate(pixelIndex, softCutoff + 18, -22, 12)) continue;
+    if (matteNeighborWeight === 0 || !isMatteCandidate(pixelIndex, haloCutoff, -20, 16)) continue;
 
     const offset = pixelOffset(pixelIndex);
     const alpha = rgba[offset + 3] ?? 255;
     if (alpha <= transparentAlpha) continue;
 
-    const fade = 1 - clampUnit((whiteDistance(pixelIndex) - hardCutoff) / Math.max(1, softCutoff + 18 - hardCutoff));
-    const edgeWeight = clampUnit(matteNeighbors / 5);
+    const fade = 1 - clampUnit((matteDistance(pixelIndex) - hardCutoff) / Math.max(1, haloCutoff - hardCutoff));
+    const edgeWeight = clampUnit(matteNeighborWeight / 3.2);
     const cleanupWeight = fade * edgeWeight;
     const neighborColor = findForegroundNeighborColor(pixelIndex);
 
@@ -258,9 +600,9 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
     } else {
       const matteAmount = clampUnit(cleanupWeight * 0.65);
       const foregroundAmount = Math.max(0.08, 1 - matteAmount);
-      rgba[offset] = clampByte(((rgba[offset] ?? 0) - 255 * matteAmount) / foregroundAmount);
-      rgba[offset + 1] = clampByte(((rgba[offset + 1] ?? 0) - 255 * matteAmount) / foregroundAmount);
-      rgba[offset + 2] = clampByte(((rgba[offset + 2] ?? 0) - 255 * matteAmount) / foregroundAmount);
+      rgba[offset] = clampByte(((rgba[offset] ?? 0) - matteColor.red * matteAmount) / foregroundAmount);
+      rgba[offset + 1] = clampByte(((rgba[offset + 1] ?? 0) - matteColor.green * matteAmount) / foregroundAmount);
+      rgba[offset + 2] = clampByte(((rgba[offset + 2] ?? 0) - matteColor.blue * matteAmount) / foregroundAmount);
     }
 
     const alphaRemoval = cleanupWeight * (0.18 + strength / 280);
@@ -276,6 +618,174 @@ async function removeNearWhiteBackgroundPng(input: Buffer, cleanupStrength = 50)
   })
     .png()
     .toBuffer();
+}
+
+async function softenBackgroundRemoverMask(
+  originalInput: Buffer,
+  aiOutput: Buffer,
+  cleanupStrength = 35,
+): Promise<Buffer> {
+  const strength = Math.max(0, Math.min(100, cleanupStrength));
+  if (strength >= 99) return aiOutput;
+
+  const sharp = await getSharp();
+  const original = await sharp(originalInput).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  if (!original.info.width || !original.info.height) return aiOutput;
+
+  const width = original.info.width;
+  const height = original.info.height;
+  const pixelCount = width * height;
+  const originalRgba = Buffer.from(original.data);
+  const originalChannels = original.info.channels;
+  const ai = await sharp(aiOutput)
+    .ensureAlpha()
+    .resize(width, height, { fit: "fill" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const outputRgba = Buffer.from(ai.data);
+  const outputChannels = ai.info.channels;
+  const transparentAlpha = 16 + ((100 - strength) / 100) * 18;
+  const backgroundMask = new Uint8Array(pixelCount);
+  const queue = new Int32Array(pixelCount);
+  let queueStart = 0;
+  let queueEnd = 0;
+
+  const originalOffset = (pixelIndex: number) => pixelIndex * originalChannels;
+  const outputOffset = (pixelIndex: number) => pixelIndex * outputChannels;
+  const outputAlpha = (pixelIndex: number) => outputRgba[outputOffset(pixelIndex) + 3] ?? 255;
+  const isOutputTransparent = (pixelIndex: number) => outputAlpha(pixelIndex) <= transparentAlpha;
+
+  const markBackground = (pixelIndex: number) => {
+    if (backgroundMask[pixelIndex] || !isOutputTransparent(pixelIndex)) return;
+    backgroundMask[pixelIndex] = 1;
+    queue[queueEnd++] = pixelIndex;
+  };
+
+  for (let xPos = 0; xPos < width; xPos++) {
+    markBackground(xPos);
+    markBackground((height - 1) * width + xPos);
+  }
+  for (let yPos = 0; yPos < height; yPos++) {
+    markBackground(yPos * width);
+    markBackground(yPos * width + width - 1);
+  }
+
+  while (queueStart < queueEnd) {
+    const pixelIndex = queue[queueStart++]!;
+    const xPos = pixelIndex % width;
+    const yPos = Math.floor(pixelIndex / width);
+    if (xPos > 0) markBackground(pixelIndex - 1);
+    if (xPos < width - 1) markBackground(pixelIndex + 1);
+    if (yPos > 0) markBackground(pixelIndex - width);
+    if (yPos < height - 1) markBackground(pixelIndex + width);
+  }
+
+  const hasForegroundNeighbor = (pixelIndex: number): boolean => {
+    const xPos = pixelIndex % width;
+    const yPos = Math.floor(pixelIndex / width);
+    for (let yOffset = -2; yOffset <= 2; yOffset++) {
+      const sampleY = yPos + yOffset;
+      if (sampleY < 0 || sampleY >= height) continue;
+      for (let xOffset = -2; xOffset <= 2; xOffset++) {
+        if (xOffset === 0 && yOffset === 0) continue;
+        const sampleX = xPos + xOffset;
+        if (sampleX < 0 || sampleX >= width) continue;
+        if (outputAlpha(sampleY * width + sampleX) >= 168) return true;
+      }
+    }
+    return false;
+  };
+
+  const hasOriginalDetailNeighbor = (pixelIndex: number): boolean => {
+    const xPos = pixelIndex % width;
+    const yPos = Math.floor(pixelIndex / width);
+    for (let yOffset = -2; yOffset <= 2; yOffset++) {
+      const sampleY = yPos + yOffset;
+      if (sampleY < 0 || sampleY >= height) continue;
+      for (let xOffset = -2; xOffset <= 2; xOffset++) {
+        const sampleX = xPos + xOffset;
+        if (sampleX < 0 || sampleX >= width) continue;
+        const offset = originalOffset(sampleY * width + sampleX);
+        const alpha = originalRgba[offset + 3] ?? 255;
+        if (alpha <= 8) continue;
+        const color = {
+          red: originalRgba[offset] ?? 255,
+          green: originalRgba[offset + 1] ?? 255,
+          blue: originalRgba[offset + 2] ?? 255,
+        };
+        if (rgbLuma(color) < 166 || rgbSpread(color) > 42) return true;
+      }
+    }
+    return false;
+  };
+
+  const restorePixel = (pixelIndex: number, restoreWeight: number) => {
+    const originalPixelOffset = originalOffset(pixelIndex);
+    const outputPixelOffset = outputOffset(pixelIndex);
+    const originalAlpha = originalRgba[originalPixelOffset + 3] ?? 255;
+    const currentAlpha = outputRgba[outputPixelOffset + 3] ?? 255;
+    const weight = clampUnit(restoreWeight);
+    if (weight <= 0 || currentAlpha >= originalAlpha) return;
+
+    outputRgba[outputPixelOffset] = clampByte(
+      (outputRgba[outputPixelOffset] ?? 0) * (1 - weight) + (originalRgba[originalPixelOffset] ?? 0) * weight,
+    );
+    outputRgba[outputPixelOffset + 1] = clampByte(
+      (outputRgba[outputPixelOffset + 1] ?? 0) * (1 - weight) +
+        (originalRgba[originalPixelOffset + 1] ?? 0) * weight,
+    );
+    outputRgba[outputPixelOffset + 2] = clampByte(
+      (outputRgba[outputPixelOffset + 2] ?? 0) * (1 - weight) +
+        (originalRgba[originalPixelOffset + 2] ?? 0) * weight,
+    );
+    outputRgba[outputPixelOffset + 3] = clampByte(
+      Math.max(currentAlpha, currentAlpha * (1 - weight) + originalAlpha * weight),
+    );
+  };
+
+  const enclosedRestoreWeight = clampUnit((105 - strength) / 70);
+  const edgeRestoreWeight = clampUnit((62 - strength) / 85) * 0.55;
+
+  for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex++) {
+    if (!isOutputTransparent(pixelIndex)) continue;
+
+    if (!backgroundMask[pixelIndex]) {
+      restorePixel(pixelIndex, enclosedRestoreWeight);
+      continue;
+    }
+
+    if (edgeRestoreWeight > 0 && hasForegroundNeighbor(pixelIndex) && hasOriginalDetailNeighbor(pixelIndex)) {
+      restorePixel(pixelIndex, edgeRestoreWeight);
+    }
+  }
+
+  return sharp(outputRgba, {
+    raw: {
+      width,
+      height,
+      channels: 4,
+    },
+  })
+    .png()
+    .toBuffer();
+}
+
+async function removeSpriteBackgroundPng(
+  input: Buffer,
+  cleanupStrength = 35,
+  engine: SpriteCleanupEngine = "auto",
+): Promise<{ buffer: Buffer; engine: UsedSpriteCleanupEngine }> {
+  if (engine !== "builtin") {
+    const aiOutput = await tryRemoveBackgroundWithBackgroundRemover(input, { required: engine === "backgroundremover" });
+    if (aiOutput) {
+      return {
+        buffer: await softenBackgroundRemoverMask(input, aiOutput, cleanupStrength),
+        engine: "backgroundremover",
+      };
+    }
+  }
+
+  return { buffer: await removeNearWhiteBackgroundPng(input, cleanupStrength), engine: "builtin" };
 }
 
 function looksLikeBase64(input: string): boolean {
@@ -401,7 +911,14 @@ function resolveReferenceImageBase64(input?: string): string | undefined {
 }
 
 export async function spritesRoutes(app: FastifyInstance) {
-  app.get("/capabilities", async () => getSpriteCapabilities());
+  app.get("/capabilities", async () => ({
+    ...(await getSpriteCapabilities()),
+    backgroundRemover: getBackgroundRemoverStatus(),
+  }));
+
+  app.get("/cleanup/status", async () => ({
+    backgroundRemover: getBackgroundRemoverStatus(),
+  }));
 
   /**
    * GET /api/sprites/:characterId
@@ -409,27 +926,7 @@ export async function spritesRoutes(app: FastifyInstance) {
    */
   app.get<{ Params: { characterId: string } }>("/:characterId", async (req, reply) => {
     const { characterId } = req.params;
-    const dir = join(SPRITES_ROOT, characterId);
-    ensureDir(dir);
-
-    try {
-      const files = readdirSync(dir);
-      const sprites = files
-        .filter((f) => /\.(png|jpg|jpeg|gif|webp|avif|svg)$/i.test(f))
-        .map((f) => {
-          const ext = extname(f);
-          const expression = f.slice(0, -ext.length);
-          const mtime = statSync(join(dir, f)).mtimeMs;
-          return {
-            expression,
-            filename: f,
-            url: `/api/sprites/${characterId}/file/${encodeURIComponent(f)}?v=${Math.floor(mtime)}`,
-          };
-        });
-      return sprites;
-    } catch {
-      return [];
-    }
+    return listSpriteInfos(characterId);
   });
 
   /**
@@ -454,10 +951,7 @@ export async function spritesRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "No image data provided" });
     }
 
-    const expression = body.expression
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "_");
+    const expression = normalizeSpriteExpression(body.expression);
 
     // Parse base64
     let base64 = body.image;
@@ -483,6 +977,202 @@ export async function spritesRoutes(app: FastifyInstance) {
       filename,
       url: `/api/sprites/${characterId}/file/${encodeURIComponent(filename)}?v=${Math.floor(mtime)}`,
     };
+  });
+
+  /**
+   * POST /api/sprites/:characterId/cleanup-saved
+   * Run background cleanup on already-saved sprite files and overwrite them as PNGs.
+   * Body: { expressions?: string[], cleanupStrength?: number, engine?: "auto" | "backgroundremover" | "builtin" }
+   */
+  app.post<{ Params: { characterId: string } }>("/:characterId/cleanup-saved", async (req, reply) => {
+    const { characterId } = req.params;
+
+    if (characterId.includes("..") || characterId.includes("/") || characterId.includes("\\")) {
+      return reply.status(400).send({ error: "Invalid character ID" });
+    }
+
+    const dir = join(SPRITES_ROOT, characterId);
+    if (!existsSync(dir)) {
+      return reply.status(404).send({ error: "No sprites found" });
+    }
+
+    const body = req.body as { expressions?: string[]; cleanupStrength?: number; engine?: SpriteCleanupEngine };
+    const requestedExpressions =
+      Array.isArray(body.expressions) && body.expressions.length > 0
+        ? new Set(body.expressions.map((expr) => normalizeSpriteExpression(String(expr))).filter(Boolean))
+        : null;
+    const cleanupStrength = Number.isFinite(body.cleanupStrength) ? Number(body.cleanupStrength) : 35;
+    const cleanupEngine = normalizeSpriteCleanupEngine(body.engine);
+
+    const files = readdirSync(dir).filter((filename) => SPRITE_FILE_RE.test(filename));
+    const targets = files.filter((filename) => {
+      const expression = filename.slice(0, -extname(filename).length);
+      return !requestedExpressions || requestedExpressions.has(normalizeSpriteExpression(expression));
+    });
+
+    if (targets.length === 0) {
+      return reply.status(404).send({ error: "No matching sprites found" });
+    }
+
+    const backupId = `${Date.now()}-${randomUUID()}`;
+    const backupDir = join(dir, ".cleanup-backups", backupId);
+    const manifest: SpriteCleanupBackupManifest = {
+      id: backupId,
+      createdAt: new Date().toISOString(),
+      entries: [],
+    };
+    const failed: Array<{ expression: string; error: string }> = [];
+    const engineCounts: Record<UsedSpriteCleanupEngine, number> = {
+      backgroundremover: 0,
+      builtin: 0,
+    };
+    let processed = 0;
+
+    for (const filename of targets) {
+      const expression = filename.slice(0, -extname(filename).length);
+      const inputPath = join(dir, filename);
+
+      try {
+        if (!CLEANUP_INPUT_FILE_RE.test(filename)) {
+          throw new Error("Only PNG, JPEG, WEBP, and AVIF sprites can be background-cleaned");
+        }
+
+        const output = await removeSpriteBackgroundPng(readFileSync(inputPath), cleanupStrength, cleanupEngine);
+        const outputFilename = `${expression}.png`;
+        const outputPath = join(dir, outputFilename);
+        await mkdir(backupDir, { recursive: true });
+        await copyFile(inputPath, join(backupDir, filename));
+        manifest.entries.push({
+          expression,
+          originalFilename: filename,
+          cleanedFilename: outputFilename,
+          backupFilename: filename,
+        });
+        await writeFile(join(backupDir, "manifest.json"), JSON.stringify(manifest, null, 2));
+        await writeFile(outputPath, output.buffer);
+
+        if (filename !== outputFilename) {
+          try {
+            unlinkSync(inputPath);
+          } catch (unlinkErr) {
+            app.log.warn(unlinkErr, "Failed to remove original sprite after cleanup");
+          }
+        }
+
+        engineCounts[output.engine] += 1;
+        processed += 1;
+      } catch (err) {
+        app.log.warn(err, 'Saved sprite "%s" background cleanup failed', expression);
+        failed.push({
+          expression,
+          error: err instanceof Error ? err.message : "Cleanup failed",
+        });
+      }
+    }
+
+    if (manifest.entries.length === 0) {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+
+    const payload = {
+      processed,
+      failed,
+      backupId: manifest.entries.length > 0 ? backupId : null,
+      engine: cleanupEngine,
+      backgroundRemoverProcessed: engineCounts.backgroundremover,
+      builtinProcessed: engineCounts.builtin,
+      sprites: listSpriteInfos(characterId),
+    };
+
+    if (processed === 0 && failed.length > 0) {
+      return reply.status(500).send({ ...payload, error: "No saved sprites were cleaned" });
+    }
+
+    return payload;
+  });
+
+  /**
+   * POST /api/sprites/:characterId/cleanup-restore
+   * Restore the previous saved sprite files from a cleanup backup.
+   * Body: { backupId: string }
+   */
+  app.post<{ Params: { characterId: string } }>("/:characterId/cleanup-restore", async (req, reply) => {
+    const { characterId } = req.params;
+
+    if (characterId.includes("..") || characterId.includes("/") || characterId.includes("\\")) {
+      return reply.status(400).send({ error: "Invalid character ID" });
+    }
+
+    const body = req.body as { backupId?: string };
+    if (!isSafeBackupId(body.backupId)) {
+      return reply.status(400).send({ error: "Invalid backup ID" });
+    }
+
+    const dir = join(SPRITES_ROOT, characterId);
+    const backupDir = join(dir, ".cleanup-backups", body.backupId);
+    const manifestPath = join(backupDir, "manifest.json");
+
+    if (!existsSync(manifestPath)) {
+      return reply.status(404).send({ error: "Cleanup backup was not found" });
+    }
+
+    let manifest: SpriteCleanupBackupManifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as SpriteCleanupBackupManifest;
+    } catch {
+      return reply.status(500).send({ error: "Cleanup backup manifest is unreadable" });
+    }
+
+    let restored = 0;
+    const failed: Array<{ expression: string; error: string }> = [];
+
+    for (const entry of manifest.entries) {
+      try {
+        if (
+          !entry.backupFilename ||
+          !entry.originalFilename ||
+          entry.backupFilename.includes("..") ||
+          entry.originalFilename.includes("..") ||
+          entry.cleanedFilename.includes("..") ||
+          entry.backupFilename.includes("/") ||
+          entry.originalFilename.includes("/") ||
+          entry.cleanedFilename.includes("/") ||
+          entry.backupFilename.includes("\\") ||
+          entry.originalFilename.includes("\\") ||
+          entry.cleanedFilename.includes("\\")
+        ) {
+          throw new Error("Backup entry has an invalid filename");
+        }
+
+        await copyFile(join(backupDir, entry.backupFilename), join(dir, entry.originalFilename));
+        if (entry.cleanedFilename !== entry.originalFilename) {
+          await unlink(join(dir, entry.cleanedFilename)).catch(() => undefined);
+        }
+        restored += 1;
+      } catch (err) {
+        app.log.warn(err, 'Saved sprite "%s" cleanup restore failed', entry.expression);
+        failed.push({
+          expression: entry.expression,
+          error: err instanceof Error ? err.message : "Restore failed",
+        });
+      }
+    }
+
+    if (restored > 0 && failed.length === 0) {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+
+    const payload = {
+      restored,
+      failed,
+      sprites: listSpriteInfos(characterId),
+    };
+
+    if (restored === 0 && failed.length > 0) {
+      return reply.status(500).send({ ...payload, error: "No saved sprites were restored" });
+    }
+
+    return payload;
   });
 
   /**
@@ -571,8 +1261,10 @@ export async function spritesRoutes(app: FastifyInstance) {
       cols?: number;
       rows?: number;
       spriteType?: "expressions" | "full-body";
+      fullBodyExpressionMode?: boolean;
       noBackground?: boolean;
       cleanupStrength?: number;
+      nativeTransparentPng?: boolean;
     };
 
     if (!body.connectionId) {
@@ -587,8 +1279,9 @@ export async function spritesRoutes(app: FastifyInstance) {
 
     const cols = body.cols ?? 2;
     const rows = body.rows ?? 3;
+    const fullBodyExpressionMode = body.spriteType === "full-body" && body.fullBodyExpressionMode === true;
     const expressions = body.expressions.slice(0, cols * rows);
-    const cleanupStrength = Number.isFinite(body.cleanupStrength) ? Number(body.cleanupStrength) : 50;
+    const cleanupStrength = Number.isFinite(body.cleanupStrength) ? Number(body.cleanupStrength) : 35;
 
     // Resolve image generation connection
     const connections = createConnectionsStorage(app.db);
@@ -612,8 +1305,32 @@ export async function spritesRoutes(app: FastifyInstance) {
       body.spriteType !== "full-body" && !singlePortrait && isOpenAIGptImageModel(imgModel);
     const promptOverridesStorage = createPromptOverridesStorage(app.db);
     const trimmedAppearance = body.appearance?.trim() || "";
+    const nativeTransparentPng = body.nativeTransparentPng === true;
+    const cleanupFriendlyTransparentPrompt =
+      nativeTransparentPng && shouldUseCleanupFriendlyTransparentPrompt(imgModel);
+    // Size the prompt to the actual canvas that will be sent to the provider.
+    // GPT Image models only accept a small set of canvas sizes, so keep the
+    // prompt's grid math aligned with the generated image instead of asking for
+    // a larger sheet that the provider silently normalizes.
+    const { sheetWidth, sheetHeight, cellWidth, cellHeight } = resolveSpriteSheetCanvas({
+      cols,
+      rows,
+      spriteType: body.spriteType,
+      model: imgModel,
+    });
     let prompt = "";
-    if (singleFullBody) {
+    if (fullBodyExpressionMode) {
+      prompt = buildFullBodyExpressionSheetPrompt({
+        cols,
+        rows,
+        expressions,
+        appearance: trimmedAppearance,
+        sheetWidth,
+        sheetHeight,
+        cellWidth,
+        cellHeight,
+      });
+    } else if (singleFullBody) {
       prompt = await loadPrompt(promptOverridesStorage, SPRITES_SINGLE_FULL_BODY, {
         appearance: trimmedAppearance,
         pose: expressions[0] ?? "idle",
@@ -622,9 +1339,14 @@ export async function spritesRoutes(app: FastifyInstance) {
       prompt = await loadPrompt(promptOverridesStorage, SPRITES_FULL_BODY_SHEET, {
         cols,
         rows,
+        cellCount: cols * rows,
         poseCount: expressions.length,
         poseList: expressionList,
         appearance: trimmedAppearance,
+        sheetWidth,
+        sheetHeight,
+        cellWidth,
+        cellHeight,
       });
     } else if (singlePortrait) {
       prompt = await loadPrompt(promptOverridesStorage, SPRITES_SINGLE_PORTRAIT, {
@@ -639,6 +1361,9 @@ export async function spritesRoutes(app: FastifyInstance) {
         expressionList,
         appearance: trimmedAppearance,
       });
+    }
+    if (nativeTransparentPng) {
+      prompt = applyNativeTransparentPngPrompt(prompt, cleanupFriendlyTransparentPrompt);
     }
 
     // Parse reference images to raw base64 (supports data URL, raw base64, or local avatar URL)
@@ -656,10 +1381,13 @@ export async function spritesRoutes(app: FastifyInstance) {
 
         for (const expression of expressions) {
           try {
-            const expressionPrompt = await loadPrompt(promptOverridesStorage, SPRITES_SINGLE_PORTRAIT, {
+            let expressionPrompt = await loadPrompt(promptOverridesStorage, SPRITES_SINGLE_PORTRAIT, {
               appearance: trimmedAppearance,
               expression,
             });
+            if (nativeTransparentPng) {
+              expressionPrompt = applyNativeTransparentPngPrompt(expressionPrompt, cleanupFriendlyTransparentPrompt);
+            }
 
             const targetSize = 1024;
             const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
@@ -669,6 +1397,7 @@ export async function spritesRoutes(app: FastifyInstance) {
               height: targetSize,
               referenceImage: resolvedRefs[0],
               referenceImages: resolvedRefs.length > 1 ? resolvedRefs : undefined,
+              transparentBackground: nativeTransparentPng,
               comfyWorkflow: conn.comfyuiWorkflow || undefined,
               imageDefaults,
             });
@@ -685,7 +1414,7 @@ export async function spritesRoutes(app: FastifyInstance) {
 
             if (body.noBackground) {
               try {
-                spriteBuffer = await removeNearWhiteBackgroundPng(spriteBuffer, cleanupStrength);
+                spriteBuffer = (await removeSpriteBackgroundPng(spriteBuffer, cleanupStrength)).buffer;
               } catch (bgErr) {
                 app.log.warn(bgErr, "Expression sprite background cleanup failed; continuing with original image");
               }
@@ -718,14 +1447,6 @@ export async function spritesRoutes(app: FastifyInstance) {
         };
       }
 
-      // Generate the sheet image.
-      // Size the canvas so the grid aspect ratio matches the requested cells;
-      // full-body sheets use taller cells so poses have room from head to toe.
-      const cellWidthHint = 512;
-      const cellHeightHint = body.spriteType === "full-body" ? 768 : 512;
-      const sheetWidth = cols * cellWidthHint;
-      const sheetHeight = rows * cellHeightHint;
-
       const imageResult = await generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
         prompt,
         model: imgModel,
@@ -733,6 +1454,7 @@ export async function spritesRoutes(app: FastifyInstance) {
         height: sheetHeight,
         referenceImage: resolvedRefs[0],
         referenceImages: resolvedRefs.length > 1 ? resolvedRefs : undefined,
+        transparentBackground: nativeTransparentPng,
         comfyWorkflow: conn.comfyuiWorkflow || undefined,
         imageDefaults,
       });
@@ -747,7 +1469,7 @@ export async function spritesRoutes(app: FastifyInstance) {
       if (body.noBackground) {
         const originalSheetBuffer = sheetBuffer;
         try {
-          sheetBuffer = await removeNearWhiteBackgroundPng(sheetBuffer, cleanupStrength);
+          sheetBuffer = (await removeSpriteBackgroundPng(sheetBuffer, cleanupStrength)).buffer;
           metadata = await sharp(sheetBuffer).metadata();
         } catch (bgErr) {
           app.log.warn(bgErr, "Sprite background cleanup failed; continuing with original image");
@@ -802,23 +1524,29 @@ export async function spritesRoutes(app: FastifyInstance) {
 
   /**
    * POST /api/sprites/cleanup
-   * Apply near-white background cleanup to already generated sprites.
-   * Body: { cells: [{ expression, base64 }], cleanupStrength }
+   * Apply background cleanup to already generated sprites.
+   * Body: { cells: [{ expression, base64 }], cleanupStrength, engine?: "auto" | "backgroundremover" | "builtin" }
    * Returns: { cells: [{ expression, base64 }] }
    */
   app.post("/cleanup", async (req, reply) => {
     const body = req.body as {
       cells?: Array<{ expression?: string; base64?: string }>;
       cleanupStrength?: number;
+      engine?: SpriteCleanupEngine;
     };
 
     if (!body.cells || body.cells.length === 0) {
       return reply.status(400).send({ error: "At least one cell is required" });
     }
 
-    const cleanupStrength = Number.isFinite(body.cleanupStrength) ? Number(body.cleanupStrength) : 50;
+    const cleanupStrength = Number.isFinite(body.cleanupStrength) ? Number(body.cleanupStrength) : 35;
+    const cleanupEngine = normalizeSpriteCleanupEngine(body.engine);
 
     try {
+      const engineCounts: Record<UsedSpriteCleanupEngine, number> = {
+        backgroundremover: 0,
+        builtin: 0,
+      };
       const processed = await Promise.all(
         body.cells.map(async (cell) => {
           const base64 = extractBase64ImageData(cell.base64 ?? "");
@@ -827,16 +1555,22 @@ export async function spritesRoutes(app: FastifyInstance) {
           }
 
           const inputBuffer = Buffer.from(base64, "base64");
-          const outputBuffer = await removeNearWhiteBackgroundPng(inputBuffer, cleanupStrength);
+          const output = await removeSpriteBackgroundPng(inputBuffer, cleanupStrength, cleanupEngine);
+          engineCounts[output.engine] += 1;
 
           return {
             expression: cell.expression ?? "",
-            base64: outputBuffer.toString("base64"),
+            base64: output.buffer.toString("base64"),
           };
         }),
       );
 
-      return { cells: processed };
+      return {
+        cells: processed,
+        engine: cleanupEngine,
+        backgroundRemoverProcessed: engineCounts.backgroundremover,
+        builtinProcessed: engineCounts.builtin,
+      };
     } catch (err: any) {
       app.log.error(err, "Sprite cleanup failed");
       return reply.status(500).send({

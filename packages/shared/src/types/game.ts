@@ -13,6 +13,9 @@ export type GameGmMode = "standalone" | "character";
 /** Status of a game session. */
 export type GameSessionStatus = "setup" | "active" | "concluded";
 
+/** Spotify source constraints for Game Mode DJ selection. */
+export type GameSpotifySourceType = "liked" | "playlist" | "artist" | "any";
+
 // ── Maps ──
 
 /** A cell in the overworld grid map. */
@@ -183,6 +186,18 @@ export interface GameSetupConfig {
   activeLorebookIds?: string[];
   /** Enable custom HUD widgets (model designs them at game start and updates during play) */
   enableCustomWidgets?: boolean;
+  /** Enable Spotify DJ for this game and use Spotify music instead of local game music assets. */
+  enableSpotifyDj?: boolean;
+  /** Music source constraint for Spotify DJ. */
+  spotifySourceType?: GameSpotifySourceType;
+  /** Spotify playlist ID used when spotifySourceType is "playlist". */
+  spotifyPlaylistId?: string | null;
+  /** Human-readable playlist name cached for prompts/display. */
+  spotifyPlaylistName?: string | null;
+  /** Spotify artist name used when spotifySourceType is "artist". */
+  spotifyArtist?: string | null;
+  /** Enable Lorebook Keeper for this game. */
+  enableLorebookKeeper?: boolean;
   /** Language for all narration and dialogue (e.g. "English", "Japanese", "Spanish") */
   language?: string;
   /** Optional generation parameter overrides applied from the moment the game is created. */
@@ -482,11 +497,35 @@ export interface BlueprintVisualTheme {
   moodDefault: string;
 }
 
+export interface CampaignPressureClock {
+  name: string;
+  steps: number;
+  current: number;
+  failure: string;
+}
+
+export interface CampaignFaction {
+  name: string;
+  goal: string;
+  method?: string;
+  secret?: string;
+}
+
+/** Optional compact GM-only structure for campaigns that need stronger pacing. */
+export interface GameCampaignPlan {
+  openingSituation?: string;
+  pressureClocks?: CampaignPressureClock[];
+  factions?: CampaignFaction[];
+  questSeeds?: string[];
+  encounterPrinciples?: string[];
+}
+
 /** The GM-designed blueprint created during game setup. */
 export interface GameBlueprint {
   hudWidgets: HudWidget[];
   introSequence: DirectionCommand[];
   visualTheme: BlueprintVisualTheme;
+  campaignPlan?: GameCampaignPlan;
 }
 
 // ── Party Dialogue ──

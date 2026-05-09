@@ -775,7 +775,7 @@ export function ChatArea() {
         {
           onSuccess: () => {
             // Refetch game state so the HUD shows trackers for the active swipe
-            if (activeChatId) {
+            if (isGameChat && activeChatId) {
               api
                 .get<import("@marinara-engine/shared").GameState | null>(`/chats/${activeChatId}/game-state`)
                 .then((gs) => {
@@ -787,7 +787,7 @@ export function ChatArea() {
         },
       );
     },
-    [setActiveSwipe, activeChatId],
+    [setActiveSwipe, isGameChat, activeChatId],
   );
 
   const handleEdit = useCallback(

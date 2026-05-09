@@ -134,6 +134,33 @@ type CombatVoiceLine = PartyDialogueLine & {
   voiceKey: string;
 };
 
+function CombatantSpriteVisual({
+  combatant,
+  imageClassName,
+  textClassName,
+  emojiClassName,
+}: {
+  combatant: Combatant;
+  imageClassName: string;
+  textClassName: string;
+  emojiClassName?: string;
+}) {
+  const spriteKind = resolveSpriteKind(combatant.sprite);
+  if (spriteKind.kind === "url") {
+    return <img src={spriteKind.value} alt={combatant.name} className={imageClassName} />;
+  }
+
+  if (spriteKind.kind === "emoji") {
+    return (
+      <span className={emojiClassName ?? textClassName} aria-hidden="true">
+        {spriteKind.value}
+      </span>
+    );
+  }
+
+  return <span className={textClassName}>{combatant.name.charAt(0).toUpperCase()}</span>;
+}
+
 interface GameCombatUIProps {
   chatId: string;
   /** Player party combatants. */
@@ -1353,22 +1380,12 @@ export function GameCombatUI({
               phase === "target-select") && (
               <div className="flex shrink-0 items-center gap-2 border-b border-white/5 px-3 py-1.5">
                 <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-blue-500/20 text-blue-300 ring-1 ring-blue-400/40">
-                  {(() => {
-                    const spriteKind = resolveSpriteKind(activePlayer.sprite);
-                    if (spriteKind.kind === "url") {
-                      return (
-                        <img
-                          src={spriteKind.value}
-                          alt={activePlayer.name}
-                          className="h-full w-full object-cover"
-                        />
-                      );
-                    }
-                    if (spriteKind.kind === "emoji") {
-                      return <span className="text-base leading-none">{spriteKind.value}</span>;
-                    }
-                    return <span className="text-[0.65rem] font-bold">{activePlayer.name.charAt(0).toUpperCase()}</span>;
-                  })()}
+                  <CombatantSpriteVisual
+                    combatant={activePlayer}
+                    imageClassName="h-full w-full object-cover"
+                    textClassName="text-[0.65rem] font-bold"
+                    emojiClassName="text-base leading-none"
+                  />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-semibold text-white">{activePlayer.name}</div>
@@ -1612,6 +1629,29 @@ export function GameCombatUI({
                         <span className="min-w-0 truncate font-semibold">{member.name}</span>
                         <span className="shrink-0 text-[0.6rem] tabular-nums text-white/55">
                           HP {member.hp}/{member.maxHp}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {selectingEnemyTarget && (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {enemies.map((enemy) => (
+                      <button
+                        key={enemy.id}
+                        type="button"
+                        disabled={enemy.hp <= 0}
+                        onClick={() => handleTargetSelect(enemy.id)}
+                        className={cn(
+                          "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs",
+                          enemy.hp <= 0
+                            ? "cursor-not-allowed border-white/10 bg-white/5 text-white/30"
+                            : "border-amber-400/30 bg-amber-500/10 text-white/85 hover:bg-amber-500/15",
+                        )}
+                      >
+                        <span className="min-w-0 truncate font-semibold">{enemy.name}</span>
+                        <span className="shrink-0 text-[0.6rem] tabular-nums text-white/55">
+                          HP {enemy.hp}/{enemy.maxHp}
                         </span>
                       </button>
                     ))}
@@ -1875,22 +1915,12 @@ export function GameCombatUI({
             {/* Active character indicator */}
             <div className="mb-1 flex items-center gap-2 sm:mb-0 sm:min-w-[140px]">
               <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-blue-500/20 text-blue-300 ring-1 ring-blue-400/40">
-                {(() => {
-                  const spriteKind = resolveSpriteKind(activePlayer.sprite);
-                  if (spriteKind.kind === "url") {
-                    return (
-                      <img
-                        src={spriteKind.value}
-                        alt={activePlayer.name}
-                        className="h-full w-full object-cover"
-                      />
-                    );
-                  }
-                  if (spriteKind.kind === "emoji") {
-                    return <span className="text-lg leading-none">{spriteKind.value}</span>;
-                  }
-                  return <span className="text-xs font-bold">{activePlayer.name.charAt(0).toUpperCase()}</span>;
-                })()}
+                <CombatantSpriteVisual
+                  combatant={activePlayer}
+                  imageClassName="h-full w-full object-cover"
+                  textClassName="text-xs font-bold"
+                  emojiClassName="text-lg leading-none"
+                />
               </div>
               <div>
                 <div className="text-xs font-semibold text-white">{activePlayer.name}</div>
@@ -2128,6 +2158,52 @@ export function GameCombatUI({
                 className="min-w-0 break-words text-sm text-amber-200 [overflow-wrap:anywhere]"
               />
             </div>
+            {selectingEnemyTarget && (
+              <div className="flex max-w-full flex-wrap gap-2">
+                {enemies.map((enemy) => (
+                  <button
+                    key={enemy.id}
+                    type="button"
+                    disabled={enemy.hp <= 0}
+                    onClick={() => handleTargetSelect(enemy.id)}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-xs transition-colors",
+                      enemy.hp <= 0
+                        ? "cursor-not-allowed border-white/10 bg-white/5 text-white/30"
+                        : "border-amber-400/25 bg-amber-500/10 text-white/85 hover:border-amber-300/45 hover:bg-amber-500/15",
+                    )}
+                  >
+                    <div className="font-semibold text-white/90">{enemy.name}</div>
+                    <div className="mt-0.5 text-[0.65rem] tabular-nums text-white/45">
+                      HP {enemy.hp}/{enemy.maxHp}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectingAllyTarget && (
+              <div className="flex max-w-full flex-wrap gap-2">
+                {party.map((member) => (
+                  <button
+                    key={member.id}
+                    type="button"
+                    disabled={member.hp <= 0}
+                    onClick={() => handleTargetSelect(member.id)}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-xs transition-colors",
+                      member.hp <= 0
+                        ? "cursor-not-allowed border-white/10 bg-white/5 text-white/30"
+                        : "border-blue-400/25 bg-blue-500/10 text-white/85 hover:border-blue-300/45 hover:bg-blue-500/15",
+                    )}
+                  >
+                    <div className="font-semibold text-white/90">{member.name}</div>
+                    <div className="mt-0.5 text-[0.65rem] tabular-nums text-white/45">
+                      HP {member.hp}/{member.maxHp}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               onClick={() => {
                 setPhase(
@@ -2392,36 +2468,15 @@ function CombatantCard({
           impactTone === "miss" && "game-combatant-impact--miss",
         )}
       >
-        {/* Avatar: real image URL, LLM-suggested emoji, or initials placeholder. */}
-        {(() => {
-          const spriteKind = resolveSpriteKind(combatant.sprite);
-          if (spriteKind.kind === "url") {
-            return (
-              <img
-                src={spriteKind.value}
-                alt={combatant.name}
-                className="h-full w-full rounded-lg object-cover"
-              />
-            );
-          }
-          if (spriteKind.kind === "emoji") {
-            return (
-              <span className="text-2xl leading-none sm:text-3xl xl:text-4xl" aria-hidden="true">
-                {spriteKind.value}
-              </span>
-            );
-          }
-          return (
-            <span
-              className={cn(
-                "text-xl font-bold sm:text-2xl xl:text-3xl",
-                side === "enemy" ? "text-red-300/60" : "text-blue-300/60",
-              )}
-            >
-              {combatant.name.charAt(0).toUpperCase()}
-            </span>
-          );
-        })()}
+        <CombatantSpriteVisual
+          combatant={combatant}
+          imageClassName="h-full w-full rounded-lg object-cover"
+          textClassName={cn(
+            "text-xl font-bold sm:text-2xl xl:text-3xl",
+            side === "enemy" ? "text-red-300/60" : "text-blue-300/60",
+          )}
+          emojiClassName="text-2xl leading-none sm:text-3xl xl:text-4xl"
+        />
 
         {/* KO overlay */}
         {isKo && (
@@ -2552,20 +2607,12 @@ function MobileCombatantChip({
           side === "enemy" ? "bg-red-500/15 text-red-300/65" : "bg-blue-500/15 text-blue-300/65",
         )}
       >
-        {(() => {
-          const spriteKind = resolveSpriteKind(combatant.sprite);
-          if (spriteKind.kind === "url") {
-            return <img src={spriteKind.value} alt={combatant.name} className="h-full w-full object-cover" />;
-          }
-          if (spriteKind.kind === "emoji") {
-            return (
-              <span className="text-lg leading-none" aria-hidden="true">
-                {spriteKind.value}
-              </span>
-            );
-          }
-          return <span className="text-sm font-bold">{combatant.name.charAt(0).toUpperCase()}</span>;
-        })()}
+        <CombatantSpriteVisual
+          combatant={combatant}
+          imageClassName="h-full w-full object-cover"
+          textClassName="text-sm font-bold"
+          emojiClassName="text-lg leading-none"
+        />
         {isKo && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/55">
             <Skull className="h-4 w-4 text-red-400/80" />

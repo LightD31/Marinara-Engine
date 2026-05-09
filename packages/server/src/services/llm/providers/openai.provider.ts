@@ -16,10 +16,10 @@ import { logger } from "../../../lib/logger.js";
 
 /**
  * Models that ONLY support the Responses API (`/responses`) and not Chat Completions.
- * All GPT-5.4 variants (base, pro, mini, dated snapshots) and Codex models use Responses.
+ * GPT-5.5, GPT-5.4 variants (base, pro, mini, dated snapshots), and Codex models use Responses.
  * Matching is case-insensitive.
  */
-const RESPONSES_ONLY_PREFIXES = ["gpt-5.4", "codex-"];
+const RESPONSES_ONLY_PREFIXES = ["gpt-5.5", "gpt-5.4", "codex-"];
 const RESPONSES_ONLY_SUFFIXES = ["-codex", "-codex-max", "-codex-mini"];
 
 type ChatCompletionsUsagePayload = {
@@ -339,9 +339,13 @@ export class OpenAIProvider extends BaseLLMProvider {
     return this.providerKind === "custom";
   }
 
+  private isGpt55Model(model: string): boolean {
+    return model.toLowerCase().startsWith("gpt-5.5");
+  }
+
   /** Check if a model ID represents an OpenAI reasoning model */
   private isReasoningModel(model: string): boolean {
-    if (this.isGenericCustomProvider()) return false;
+    if (this.isGenericCustomProvider() && !this.isGpt55Model(model)) return false;
     const m = model.toLowerCase();
     return /^(o1|o3|o4)/.test(m) || m.startsWith("gpt-5");
   }
@@ -387,12 +391,14 @@ export class OpenAIProvider extends BaseLLMProvider {
   /**
    * Check if a model/config does NOT support temperature/topP.
    * o-series models never do.
-   * GPT-5.x models only support temperature when reasoning effort is "none" (the default).
+   * GPT-5.5 rejects sampling params entirely; older GPT-5.x models only reject
+   * them when reasoning effort is active.
    */
   private isNoTemperatureModel(model: string, reasoningEffort?: string): boolean {
-    if (this.isGenericCustomProvider()) return false;
+    if (this.isGenericCustomProvider() && !this.isGpt55Model(model)) return false;
     const m = model.toLowerCase();
     if (/^(o1|o3|o4)/.test(m)) return true;
+    if (this.isGpt55Model(model)) return true;
     if (m.startsWith("gpt-5") && reasoningEffort && reasoningEffort !== "none") return true;
     // Claude Opus 4.7+: all sampling params forbidden (covers reverse proxies)
     if (/claude-opus-4-(?:[7-9]|\d{2,})/.test(m)) return true;
@@ -498,6 +504,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
   /** Check if a model requires or benefits from the Responses API instead of Chat Completions */
   private useResponsesAPI(model: string, options?: Pick<ChatOptions, "captureReasoning">): boolean {
+    if (this.isGpt55Model(model)) return true;
     if (this.isGenericCustomProvider()) return false;
     const m = model.toLowerCase();
     return (
@@ -506,11 +513,6 @@ export class OpenAIProvider extends BaseLLMProvider {
       RESPONSES_ONLY_PREFIXES.some((p) => m.startsWith(p)) ||
       RESPONSES_ONLY_SUFFIXES.some((s) => m.endsWith(s))
     );
-  }
-
-  private requiresStreamingChatCompletions(model: string): boolean {
-    if (this.isGenericCustomProvider()) return false;
-    return model.toLowerCase().startsWith("gpt-5.5");
   }
 
   private shouldUseOpenRouterPromptCaching(options: ChatOptions): boolean {
@@ -529,7 +531,26 @@ export class OpenAIProvider extends BaseLLMProvider {
   }
 
   private supportsGpt5Verbosity(model: string): boolean {
-    return !this.isGenericCustomProvider() && model.toLowerCase().startsWith("gpt-5");
+    return (!this.isGenericCustomProvider() || this.isGpt55Model(model)) && model.toLowerCase().startsWith("gpt-5");
+  }
+
+  private applyResponsesTextOptions(body: Record<string, unknown>, options: ChatOptions): void {
+    const textOptions =
+      body.text && typeof body.text === "object" && !Array.isArray(body.text)
+        ? (body.text as Record<string, unknown>)
+        : {};
+
+    if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
+      textOptions.verbosity = options.verbosity;
+    }
+
+    if (options.responseFormat) {
+      textOptions.format = options.responseFormat;
+    }
+
+    if (Object.keys(textOptions).length > 0) {
+      body.text = textOptions;
+    }
   }
 
   private shouldApplyOpenRouterProviderOverride(openrouterProvider?: string | null): boolean {
@@ -627,7 +648,7 @@ export class OpenAIProvider extends BaseLLMProvider {
       formatted.push({ role: "user", content: "Continue." });
     }
 
-    const effectiveStream = this.requiresStreamingChatCompletions(options.model) ? true : (options.stream ?? true);
+    const effectiveStream = options.stream ?? true;
 
     const body: Record<string, unknown> = {
       model: options.model,
@@ -830,9 +851,7 @@ export class OpenAIProvider extends BaseLLMProvider {
     const url = `${this.baseUrl}/chat/completions`;
     const reasoning = this.isReasoningModel(options.model);
 
-    const useStream = this.requiresStreamingChatCompletions(options.model)
-      ? true
-      : (options.stream ?? !!options.onToken);
+    const useStream = options.stream ?? !!options.onToken;
 
     const formatted = this.formatMessages(messages, options.model);
     if (!formatted.some((m) => m.role !== "system" && m.role !== "developer")) {
@@ -1244,10 +1263,8 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     this.applyResponsesReasoning(body, options);
 
-    // GPT-5+ text verbosity control
-    if (options.verbosity && this.supportsGpt5Verbosity(options.model)) {
-      body.text = { verbosity: options.verbosity };
-    }
+    // GPT-5+ verbosity and Responses structured output / JSON mode.
+    this.applyResponsesTextOptions(body, options);
 
     const openrouterProvider = this.resolveOpenrouterProvider(options.openrouterProvider);
     if (this.shouldApplyOpenRouterProviderOverride(openrouterProvider)) {

@@ -106,8 +106,8 @@ export interface ChatOptions {
   onEncryptedReasoning?: (items: unknown[]) => void;
   /** Callback to receive Chat Completions reasoning fields that must be replayed for some providers */
   onChatCompletionsReasoning?: (metadata: Record<string, unknown>) => void;
-  /** Force a specific response format (e.g. { type: "json_object" }) */
-  responseFormat?: { type: string };
+  /** Force a specific response format (e.g. { type: "json_object" } or a JSON schema config) */
+  responseFormat?: { type: string; [key: string]: unknown };
   /** Raw provider request parameters merged into the outgoing request body. */
   customParameters?: Record<string, unknown>;
 }

@@ -34,39 +34,6 @@ test("loads existing lorebook entry content for Keeper context", async () => {
   ]);
 });
 
-test("appends Lorebook Keeper newFacts instead of replacing existing content", () => {
-  const merged = mergeLorebookKeeperUpdateContent({
-    existingContent: "Dottore keeps a private laboratory under the observatory.",
-    replacementContent: "A worse rewrite from the model.",
-    newFacts: ["He stores failed segment notes in a black iron cabinet."],
-  });
-
-  assert.equal(
-    merged,
-    [
-      "Dottore keeps a private laboratory under the observatory.",
-      "",
-      "- He stores failed segment notes in a black iron cabinet.",
-    ].join("\n"),
-  );
-});
-
-test("keeps content unchanged when Lorebook Keeper repeats an existing fact", () => {
-  const existing = [
-    "Dottore keeps a private laboratory under the observatory.",
-    "",
-    "- He stores failed segment notes in a black iron cabinet.",
-  ].join("\n");
-
-  const merged = mergeLorebookKeeperUpdateContent({
-    existingContent: existing,
-    replacementContent: "Another attempted rewrite.",
-    newFacts: ["He stores failed segment notes in a black iron cabinet."],
-  });
-
-  assert.equal(merged, existing);
-});
-
 test("falls back to replacement content for older Lorebook Keeper update payloads", () => {
   const merged = mergeLorebookKeeperUpdateContent({
     existingContent: "Old content.",

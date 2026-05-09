@@ -266,12 +266,26 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
       currentBackground: z.string().nullable().optional(),
       currentMusic: z.string().nullable().optional(),
       recentMusic: z.array(z.string()).max(20).optional(),
+      availableSpotifyTracks: z
+        .array(
+          z.object({
+            uri: z.string().min(1).max(300),
+            name: z.string().min(1).max(300),
+            artist: z.string().min(1).max(300),
+            album: z.string().max(300).nullable().optional(),
+            position: z.number().nullable().optional(),
+            score: z.number().nullable().optional(),
+          }),
+        )
+        .max(50)
+        .optional(),
       currentAmbient: z.string().nullable().optional(),
       currentWeather: z.string().nullable().optional(),
       currentTimeOfDay: z.string().nullable().optional(),
       canGenerateBackgrounds: z.boolean().optional(),
       canGenerateIllustrations: z.boolean().optional(),
       artStylePrompt: z.string().nullable().optional(),
+      imagePromptInstructions: z.string().max(1200).nullable().optional(),
     }),
     debugMode: z.boolean().optional().default(false),
   });
@@ -321,6 +335,7 @@ export const sidecarRoutes: FastifyPluginAsync = async (app) => {
       const ppCtx: PostProcessContext = {
         availableBackgrounds: bgTags,
         availableSfx: sfxTags,
+        availableSpotifyTracks: body.context.availableSpotifyTracks ?? [],
         canGenerateBackgrounds: !!body.context.canGenerateBackgrounds,
         validWidgetIds: new Set(
           (body.context.activeWidgets ?? [])

@@ -56,7 +56,9 @@ export const GAME_NPC_PORTRAIT: PromptOverrideKeyDef<GameNpcPortraitCtx> = {
       ctx.nonHumanRule,
       ctx.artStyleLine,
       ctx.compositionRule,
-      `High quality game avatar, clear readable design, no text, no UI, no watermark.`,
+      `SD/Illustrious tags: solo, single character, portrait, upper body, centered composition, clean readable avatar.`,
+      `Single subject only, one portrait, one face, one frame. High quality game avatar, clear readable design.`,
+      `Avoid text, letters, captions, UI, watermarks, logos, signatures, speech bubbles, split panels, collage, contact sheet, multiple portraits, duplicated faces, and four-image grids.`,
     ]
       .filter(Boolean)
       .join(" "),
@@ -95,7 +97,7 @@ export const GAME_BACKGROUND: PromptOverrideKeyDef<GameBackgroundCtx> = {
     },
   ],
   defaultBuilder: (ctx) =>
-    `${ctx.sceneDescription}. ${ctx.styleLine} Wide-angle landscape, detailed environment, no characters, no text, no UI, game background art, high quality`,
+    `${ctx.sceneDescription}. ${ctx.styleLine} SD/Illustrious tags: scenery, environment, wide shot, landscape, full-frame background, no humans. Wide-angle landscape, detailed environment, single full-frame background, scenery only, no characters, no text, no UI, no panels, no collage, game background art, high quality`,
   exampleContext: {
     sceneDescription: "moonlit graveyard with crumbling tombstones",
     styleLine:
@@ -116,6 +118,7 @@ export interface GameSceneIllustrationCtx extends Record<string, string | number
   referenceHandlingLine: string;
   appearanceNotesBlock: string;
   artDirectionLine: string;
+  imagePromptInstructionsLine: string;
 }
 
 export const GAME_SCENE_ILLUSTRATION: PromptOverrideKeyDef<GameSceneIllustrationCtx> = {
@@ -155,6 +158,11 @@ export const GAME_SCENE_ILLUSTRATION: PromptOverrideKeyDef<GameSceneIllustration
       example:
         "Art direction: Watercolor fantasy illustration, soft edges, warm palette, Ghibli-inspired, fantasy, medieval kingdom.",
     },
+    {
+      name: "imagePromptInstructionsLine",
+      description: "Pre-formatted user image instructions line from chat settings, or empty string.",
+      example: "User image instructions: Dottore's mask fully covers his eyes; do not render visible eyes behind it.",
+    },
   ],
   defaultBuilder: (ctx) =>
     [
@@ -166,8 +174,10 @@ export const GAME_SCENE_ILLUSTRATION: PromptOverrideKeyDef<GameSceneIllustration
       ctx.referenceHandlingLine,
       ctx.appearanceNotesBlock,
       ctx.artDirectionLine,
-      "Composition: cinematic 16:9 visual novel CG, emotionally specific staging, clear focal point, high-quality finished illustration.",
-      "Avoid: text, UI, captions, speech bubbles, watermarks, and unrelated characters.",
+      ctx.imagePromptInstructionsLine,
+      "SD/Illustrious tags: visual novel CG, cinematic composition, full-frame single scene, dramatic lighting, clear focal point.",
+      "Composition: cinematic 16:9 visual novel CG, one full-frame illustration, emotionally specific staging, clear focal point, high-quality finished illustration.",
+      "Avoid: text, letters, UI, captions, speech bubbles, watermarks, logos, signatures, split panels, collage, contact sheet, character sheet, four-image grid, duplicated faces, and unrelated characters.",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -181,5 +191,7 @@ export const GAME_SCENE_ILLUSTRATION: PromptOverrideKeyDef<GameSceneIllustration
       "Appearance notes for visible characters without an attached reference image:\n- Lyra: auburn hair, green eyes, leather jacket",
     artDirectionLine:
       "Art direction: Watercolor fantasy illustration, soft edges, warm palette, Ghibli-inspired, fantasy, medieval kingdom.",
+    imagePromptInstructionsLine:
+      "User image instructions: Dottore's mask fully covers his eyes; do not render visible eyes behind it.",
   },
 };

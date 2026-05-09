@@ -625,9 +625,10 @@ export function GameInput({
             (text.trim() || attachments.length > 0 || (pendingMoveLabel && addressMode === "scene") || queuedDice) &&
               !disabled &&
               !rollingQueuedDice
-              ? "text-[var(--foreground)]/50 hover:text-[var(--foreground)]/70"
-              : "text-[var(--muted-foreground)]/40",
+              ? "text-[var(--foreground)]/50 hover:bg-foreground/10 hover:text-[var(--foreground)]/70 dark:text-white/70 dark:hover:bg-white/10 dark:hover:text-white"
+              : "text-[var(--muted-foreground)]/40 dark:text-white/30",
           )}
+          aria-label="Send game turn"
         >
           <Send size={18} />
         </button>

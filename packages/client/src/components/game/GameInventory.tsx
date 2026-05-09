@@ -2,7 +2,7 @@
 // Game: Inventory Panel
 // ──────────────────────────────────────────────
 import { useState, useCallback, useEffect } from "react";
-import { Check, Package, Plus, Trash2, Wand2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Package, Plus, Trash2, Wand2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 export interface InventoryItem {
@@ -27,6 +27,8 @@ interface GameInventoryProps {
   canInteract?: boolean;
 }
 
+const ITEMS_PER_PAGE = 20;
+
 export function GameInventory({
   items,
   open,
@@ -41,6 +43,7 @@ export function GameInventory({
   const [renameDraft, setRenameDraft] = useState("");
   const [renamePending, setRenamePending] = useState(false);
   const [addPending, setAddPending] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
 
   const handleItemClick = useCallback(
     (item: InventoryItem) => {
@@ -70,10 +73,25 @@ export function GameInventory({
   }, [items, selectedItem]);
 
   const selectedInventoryItem = selectedItem ? (items.find((item) => item.name === selectedItem) ?? null) : null;
+  const pageCount = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+  const pageStart = pageIndex * ITEMS_PER_PAGE;
+  const pageItems = items.slice(pageStart, pageStart + ITEMS_PER_PAGE);
 
   useEffect(() => {
     setRenameDraft(selectedInventoryItem?.name ?? "");
   }, [selectedInventoryItem?.name]);
+
+  useEffect(() => {
+    setPageIndex((current) => Math.min(current, pageCount - 1));
+  }, [pageCount]);
+
+  useEffect(() => {
+    if (!selectedItem) return;
+    const selectedIndex = items.findIndex((item) => item.name === selectedItem);
+    if (selectedIndex >= 0) {
+      setPageIndex(Math.floor(selectedIndex / ITEMS_PER_PAGE));
+    }
+  }, [items, selectedItem]);
 
   const handleRename = useCallback(
     async (itemName: string) => {
@@ -95,28 +113,26 @@ export function GameInventory({
     [onRenameItem, renameDraft],
   );
 
-  const SLOT_COUNT = 20;
-  const inventoryFull = items.length >= SLOT_COUNT;
-
   const handleAdd = useCallback(async () => {
-    if (!onAddItem || inventoryFull) return;
+    if (!onAddItem) return;
 
     setAddPending(true);
     try {
       const addedItemName = await onAddItem();
       if (addedItemName) {
         setSelectedItem(addedItemName);
+        setPageIndex(Math.floor(items.length / ITEMS_PER_PAGE));
       }
     } finally {
       setAddPending(false);
     }
-  }, [inventoryFull, onAddItem]);
+  }, [items.length, onAddItem]);
 
   if (!open) return null;
 
   const slots: Array<InventoryItem | null> = [];
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    slots.push(items[i] ?? null);
+  for (let i = 0; i < ITEMS_PER_PAGE; i++) {
+    slots.push(pageItems[i] ?? null);
   }
 
   return (
@@ -128,7 +144,7 @@ export function GameInventory({
             <Package size={15} className="text-amber-400/80" />
             <h2 className="text-sm font-semibold tracking-wide text-white/90">Inventory</h2>
             <span className="rounded bg-white/8 px-1.5 py-0.5 text-[0.6rem] tabular-nums text-white/40">
-              {items.length}/{SLOT_COUNT}
+              {items.length} {items.length === 1 ? "item" : "items"}
             </span>
           </div>
           <button
@@ -141,10 +157,33 @@ export function GameInventory({
 
         {/* Slot grid */}
         <div className="flex-1 overflow-y-auto p-3">
+          {pageCount > 1 && (
+            <div className="mb-2 flex items-center justify-between gap-2 text-[0.625rem] text-white/45">
+              <button
+                onClick={() => setPageIndex((page) => Math.max(0, page - 1))}
+                disabled={pageIndex === 0}
+                className="flex h-6 w-6 items-center justify-center rounded border border-white/8 bg-white/[0.03] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+                title="Previous inventory page"
+              >
+                <ChevronLeft size={12} />
+              </button>
+              <span className="tabular-nums">
+                Page {pageIndex + 1} / {pageCount}
+              </span>
+              <button
+                onClick={() => setPageIndex((page) => Math.min(pageCount - 1, page + 1))}
+                disabled={pageIndex >= pageCount - 1}
+                className="flex h-6 w-6 items-center justify-center rounded border border-white/8 bg-white/[0.03] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+                title="Next inventory page"
+              >
+                <ChevronRight size={12} />
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-5 gap-1.5">
             {slots.map((item, i) => (
               <button
-                key={`slot-${i}`}
+                key={`slot-${pageStart + i}`}
                 onClick={() => item && handleItemClick(item)}
                 disabled={!item}
                 title={item ? (item.quantity > 1 ? `${item.name} ×${item.quantity}` : item.name) : undefined}
@@ -224,7 +263,7 @@ export function GameInventory({
               {onAddItem && (
                 <button
                   onClick={() => void handleAdd()}
-                  disabled={addPending || inventoryFull}
+                  disabled={addPending}
                   className="flex flex-1 items-center justify-center gap-1 rounded border border-white/8 bg-white/[0.03] py-1.5 text-[0.7rem] text-white/70 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Plus size={12} />

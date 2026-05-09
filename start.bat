@@ -202,6 +202,20 @@ if errorlevel 1 echo  [ERROR] Failed to install dependencies. & pause & exit /b 
 
 :skip_install
 
+:: Optional AI sprite background remover
+if defined BACKGROUNDREMOVER_AUTO_INSTALL (
+    if /I "%BACKGROUNDREMOVER_AUTO_INSTALL%"=="1" goto install_bgremover
+    if /I "%BACKGROUNDREMOVER_AUTO_INSTALL%"=="true" goto install_bgremover
+    if /I "%BACKGROUNDREMOVER_AUTO_INSTALL%"=="yes" goto install_bgremover
+    if /I "%BACKGROUNDREMOVER_AUTO_INSTALL%"=="on" goto install_bgremover
+)
+goto skip_bgremover
+:install_bgremover
+echo  [..] Ensuring optional AI background remover runtime...
+call :run_pnpm backgroundremover:install -- --if-missing
+if errorlevel 1 echo  [WARN] Optional background remover install failed; built-in cleanup will still work.
+:skip_bgremover
+
 :: Build if needed
 if not exist "packages\shared\dist" (
     echo  [..] Building shared types...

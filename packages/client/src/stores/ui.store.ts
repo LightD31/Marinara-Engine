@@ -21,6 +21,10 @@ export type EchoChamberSide = "top-left" | "top-right" | "bottom-left" | "bottom
 export type UserStatus = "active" | "idle" | "dnd";
 export type RoleplayAvatarStyle = "circles" | "rectangles" | "panel";
 export type GameDialogueDisplayMode = "classic" | "stacked";
+export interface FloatingWidgetPosition {
+  x: number;
+  y: number;
+}
 export const APP_LANGUAGE_OPTIONS = [{ id: "en", label: "English" }] as const;
 export type AppLanguage = (typeof APP_LANGUAGE_OPTIONS)[number]["id"];
 
@@ -29,6 +33,12 @@ export interface GameSetupLearnedOptions {
   tones: string[];
   settings: string[];
   goals: string[];
+  preferences: string[];
+}
+
+export interface GameSetupRememberedText {
+  playerGoals: string;
+  preferences: string;
 }
 
 export const SIDEBAR_WIDTH_MIN = 240;
@@ -44,6 +54,12 @@ const DEFAULT_GAME_SETUP_LEARNED_OPTIONS: GameSetupLearnedOptions = {
   tones: [],
   settings: [],
   goals: [],
+  preferences: [],
+};
+
+const DEFAULT_GAME_SETUP_REMEMBERED_TEXT: GameSetupRememberedText = {
+  playerGoals: "",
+  preferences: "",
 };
 
 function clampImageDimension(value: number) {
@@ -54,6 +70,11 @@ function clampImageDimension(value: number) {
 function normalizeLearnedGameSetupOption(value: unknown) {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+function normalizeRememberedGameSetupText(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 2000);
 }
 
 function mergeLearnedGameSetupOptions(existing: string[] | undefined, incoming: unknown[]) {
@@ -185,6 +206,12 @@ interface UIState {
   trimIncompleteModelOutput: boolean;
   /** When true, chat inputs show a microphone button for browser speech-to-text dictation. */
   speechToTextEnabled: boolean;
+  /** When true, show the global Spotify mini player in the app chrome. */
+  spotifyPlayerEnabled: boolean;
+  /** Mobile Spotify widget collapsed state. */
+  spotifyMobileWidgetCollapsed: boolean;
+  /** Mobile Spotify widget position in viewport pixels. */
+  spotifyMobileWidgetPosition: FloatingWidgetPosition;
   /** When true, Roleplay and Conversation modes support arrow-key and touch-swipe navigation between message swipes. */
   intuitiveSwipeNavigation: boolean;
   /** When true, moving past the newest swipe on the latest assistant message creates a new reroll. */
@@ -201,8 +228,10 @@ interface UIState {
   chatFontOpacity: number;
   /** Layout style for roleplay message avatars */
   roleplayAvatarStyle: RoleplayAvatarStyle;
-  /** Scale multiplier for Game mode VN portraits and full-body sprites. */
+  /** Scale multiplier for Game mode VN dialogue portraits. */
   gameAvatarScale: number;
+  /** Scale multiplier for Game mode center full-body sprites. */
+  gameFullBodySpriteScale: number;
   /** Text outline/stroke width in px (0 = off) */
   textStrokeWidth: number;
   /** Text outline/stroke color */
@@ -230,6 +259,8 @@ interface UIState {
   scheduleGenerationPreferences: string;
   /** Custom Game setup chips learned from previous games. Synced so they follow the user. */
   learnedGameSetupOptions: GameSetupLearnedOptions;
+  /** Last submitted free-text Game setup fields. Synced so new games can start from the previous setup. */
+  rememberedGameSetupText: GameSetupRememberedText;
 
   // ── Input ──
   enterToSendRP: boolean;
@@ -361,6 +392,9 @@ interface UIState {
   setBoldDialogue: (v: boolean) => void;
   setTrimIncompleteModelOutput: (v: boolean) => void;
   setSpeechToTextEnabled: (v: boolean) => void;
+  setSpotifyPlayerEnabled: (v: boolean) => void;
+  setSpotifyMobileWidgetCollapsed: (v: boolean) => void;
+  setSpotifyMobileWidgetPosition: (position: FloatingWidgetPosition) => void;
   setIntuitiveSwipeNavigation: (v: boolean) => void;
   setIntuitiveSwipeRerollLatest: (v: boolean) => void;
   setNarrationFontColor: (v: string) => void;
@@ -369,6 +403,7 @@ interface UIState {
   setChatFontOpacity: (v: number) => void;
   setRoleplayAvatarStyle: (v: RoleplayAvatarStyle) => void;
   setGameAvatarScale: (v: number) => void;
+  setGameFullBodySpriteScale: (v: number) => void;
   setTextStrokeWidth: (v: number) => void;
   setTextStrokeColor: (v: string) => void;
   setCenterCompact: (v: boolean) => void;
@@ -378,7 +413,10 @@ interface UIState {
   setRpNotificationSound: (v: boolean) => void;
   setCustomConversationPrompt: (v: string | null) => void;
   setScheduleGenerationPreferences: (v: string) => void;
-  rememberGameSetupOptions: (options: Partial<GameSetupLearnedOptions>) => void;
+  rememberGameSetupOptions: (
+    options: Partial<GameSetupLearnedOptions>,
+    text?: Partial<GameSetupRememberedText>,
+  ) => void;
   setEnterToSendRP: (v: boolean) => void;
   setEnterToSendConvo: (v: boolean) => void;
   setEnterToSendGame: (v: boolean) => void;
@@ -455,6 +493,9 @@ export function pickSyncedSettings(state: UIState) {
     boldDialogue: state.boldDialogue,
     trimIncompleteModelOutput: state.trimIncompleteModelOutput,
     speechToTextEnabled: state.speechToTextEnabled,
+    spotifyPlayerEnabled: state.spotifyPlayerEnabled,
+    spotifyMobileWidgetCollapsed: state.spotifyMobileWidgetCollapsed,
+    spotifyMobileWidgetPosition: state.spotifyMobileWidgetPosition,
     intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
     intuitiveSwipeRerollLatest: state.intuitiveSwipeRerollLatest,
     narrationFontColor: state.narrationFontColor,
@@ -463,6 +504,7 @@ export function pickSyncedSettings(state: UIState) {
     chatFontOpacity: state.chatFontOpacity,
     roleplayAvatarStyle: state.roleplayAvatarStyle,
     gameAvatarScale: state.gameAvatarScale,
+    gameFullBodySpriteScale: state.gameFullBodySpriteScale,
     textStrokeWidth: state.textStrokeWidth,
     textStrokeColor: state.textStrokeColor,
     visualTheme: state.visualTheme,
@@ -488,6 +530,7 @@ export function pickSyncedSettings(state: UIState) {
     impersonateConnectionId: state.impersonateConnectionId,
     impersonateBlockAgents: state.impersonateBlockAgents,
     learnedGameSetupOptions: state.learnedGameSetupOptions,
+    rememberedGameSetupText: state.rememberedGameSetupText,
   };
 }
 
@@ -549,6 +592,9 @@ export const useUIStore = create<UIState>()(
       boldDialogue: true,
       trimIncompleteModelOutput: false,
       speechToTextEnabled: false,
+      spotifyPlayerEnabled: false,
+      spotifyMobileWidgetCollapsed: true,
+      spotifyMobileWidgetPosition: { x: 16, y: 96 },
       intuitiveSwipeNavigation: false,
       intuitiveSwipeRerollLatest: false,
       narrationFontColor: "",
@@ -557,6 +603,7 @@ export const useUIStore = create<UIState>()(
       chatFontOpacity: 90,
       roleplayAvatarStyle: "circles" as RoleplayAvatarStyle,
       gameAvatarScale: 1,
+      gameFullBodySpriteScale: 1.35,
       textStrokeWidth: 0.5,
       textStrokeColor: "#000000",
       visualTheme: "default" as VisualTheme,
@@ -569,6 +616,7 @@ export const useUIStore = create<UIState>()(
       customConversationPrompt: null,
       scheduleGenerationPreferences: "",
       learnedGameSetupOptions: DEFAULT_GAME_SETUP_LEARNED_OPTIONS,
+      rememberedGameSetupText: DEFAULT_GAME_SETUP_REMEMBERED_TEXT,
       enterToSendRP: false,
       enterToSendConvo: true,
       enterToSendGame: true,
@@ -829,6 +877,15 @@ export const useUIStore = create<UIState>()(
       setBoldDialogue: (v) => set({ boldDialogue: v }),
       setTrimIncompleteModelOutput: (v) => set({ trimIncompleteModelOutput: v }),
       setSpeechToTextEnabled: (v) => set({ speechToTextEnabled: v }),
+      setSpotifyPlayerEnabled: (v) => set({ spotifyPlayerEnabled: v }),
+      setSpotifyMobileWidgetCollapsed: (v) => set({ spotifyMobileWidgetCollapsed: v }),
+      setSpotifyMobileWidgetPosition: (position) =>
+        set({
+          spotifyMobileWidgetPosition: {
+            x: Number.isFinite(position.x) ? Math.max(8, Math.round(position.x)) : 16,
+            y: Number.isFinite(position.y) ? Math.max(8, Math.round(position.y)) : 96,
+          },
+        }),
       setIntuitiveSwipeNavigation: (v) => set({ intuitiveSwipeNavigation: v }),
       setIntuitiveSwipeRerollLatest: (v) => set({ intuitiveSwipeRerollLatest: v }),
       setNarrationFontColor: (v) => set({ narrationFontColor: v }),
@@ -837,6 +894,7 @@ export const useUIStore = create<UIState>()(
       setChatFontOpacity: (v) => set({ chatFontOpacity: Math.max(0, Math.min(100, v)) }),
       setRoleplayAvatarStyle: (v) => set({ roleplayAvatarStyle: v }),
       setGameAvatarScale: (v) => set({ gameAvatarScale: Math.max(0.75, Math.min(1.75, v)) }),
+      setGameFullBodySpriteScale: (v) => set({ gameFullBodySpriteScale: Math.max(0.75, Math.min(2.75, v)) }),
       setTextStrokeWidth: (v) => set({ textStrokeWidth: Math.max(0, Math.min(5, v)) }),
       setTextStrokeColor: (v) => set({ textStrokeColor: v }),
       setCenterCompact: (v) => set({ centerCompact: v }),
@@ -852,15 +910,27 @@ export const useUIStore = create<UIState>()(
       setRpNotificationSound: (v) => set({ rpNotificationSound: v }),
       setCustomConversationPrompt: (v) => set({ customConversationPrompt: v }),
       setScheduleGenerationPreferences: (v) => set({ scheduleGenerationPreferences: v }),
-      rememberGameSetupOptions: (options) =>
+      rememberGameSetupOptions: (options, text) =>
         set((state) => {
           const learned = state.learnedGameSetupOptions ?? DEFAULT_GAME_SETUP_LEARNED_OPTIONS;
+          const remembered = state.rememberedGameSetupText ?? DEFAULT_GAME_SETUP_REMEMBERED_TEXT;
           return {
             learnedGameSetupOptions: {
               genres: mergeLearnedGameSetupOptions(learned.genres, options.genres ?? []),
               tones: mergeLearnedGameSetupOptions(learned.tones, options.tones ?? []),
               settings: mergeLearnedGameSetupOptions(learned.settings, options.settings ?? []),
               goals: mergeLearnedGameSetupOptions(learned.goals, options.goals ?? []),
+              preferences: mergeLearnedGameSetupOptions(learned.preferences, options.preferences ?? []),
+            },
+            rememberedGameSetupText: {
+              playerGoals:
+                text?.playerGoals !== undefined
+                  ? normalizeRememberedGameSetupText(text.playerGoals)
+                  : remembered.playerGoals,
+              preferences:
+                text?.preferences !== undefined
+                  ? normalizeRememberedGameSetupText(text.preferences)
+                  : remembered.preferences,
             },
           };
         }),
@@ -898,10 +968,10 @@ export const useUIStore = create<UIState>()(
       setUserStatus: (status) => set({ userStatus: status }),
       setUserStatusManual: (status) => set({ userStatusManual: status, userStatus: status }),
       setUserActivity: (activity) => set({ userActivity: activity.slice(0, 120) }),
-    }),
+      }),
     {
       name: "marinara-engine-ui",
-      version: 19,
+      version: 21,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1076,9 +1146,40 @@ export const useUIStore = create<UIState>()(
             persisted.hasMigratedExtensionsToServer = false;
           }
         }
-        // v18 -> v19: let CYOA choices opt into impersonate generation.
+        // v18 -> v19: add impersonate CYOA opt-in and split full-body sprite scale from portrait scale.
         if (version <= 18) {
           if (persisted.impersonateCyoaChoices === undefined) persisted.impersonateCyoaChoices = false;
+          if (persisted.gameFullBodySpriteScale === undefined) {
+            persisted.gameFullBodySpriteScale = 1.35;
+          }
+        }
+        // v19 -> v20: add global Spotify mini player controls.
+        if (version <= 19) {
+          if (persisted.spotifyPlayerEnabled === undefined) persisted.spotifyPlayerEnabled = false;
+          if (persisted.spotifyMobileWidgetCollapsed === undefined) persisted.spotifyMobileWidgetCollapsed = true;
+          if (persisted.spotifyMobileWidgetPosition === undefined) {
+            persisted.spotifyMobileWidgetPosition = { x: 16, y: 96 };
+          }
+        }
+        // v20 -> v21: remember Game setup free-text fields and learned preference chips.
+        if (version <= 20) {
+          const learned =
+            persisted.learnedGameSetupOptions && typeof persisted.learnedGameSetupOptions === "object"
+              ? persisted.learnedGameSetupOptions
+              : {};
+          persisted.learnedGameSetupOptions = {
+            ...DEFAULT_GAME_SETUP_LEARNED_OPTIONS,
+            ...learned,
+            preferences: Array.isArray(learned.preferences) ? learned.preferences : [],
+          };
+          if (persisted.rememberedGameSetupText === undefined) {
+            persisted.rememberedGameSetupText = DEFAULT_GAME_SETUP_REMEMBERED_TEXT;
+          } else {
+            persisted.rememberedGameSetupText = {
+              playerGoals: normalizeRememberedGameSetupText(persisted.rememberedGameSetupText.playerGoals),
+              preferences: normalizeRememberedGameSetupText(persisted.rememberedGameSetupText.preferences),
+            };
+          }
         }
         return persisted;
       },
@@ -1119,6 +1220,9 @@ export const useUIStore = create<UIState>()(
         boldDialogue: state.boldDialogue,
         trimIncompleteModelOutput: state.trimIncompleteModelOutput,
         speechToTextEnabled: state.speechToTextEnabled,
+        spotifyPlayerEnabled: state.spotifyPlayerEnabled,
+        spotifyMobileWidgetCollapsed: state.spotifyMobileWidgetCollapsed,
+        spotifyMobileWidgetPosition: state.spotifyMobileWidgetPosition,
         intuitiveSwipeNavigation: state.intuitiveSwipeNavigation,
         intuitiveSwipeRerollLatest: state.intuitiveSwipeRerollLatest,
         narrationFontColor: state.narrationFontColor,
@@ -1127,6 +1231,7 @@ export const useUIStore = create<UIState>()(
         chatFontOpacity: state.chatFontOpacity,
         roleplayAvatarStyle: state.roleplayAvatarStyle,
         gameAvatarScale: state.gameAvatarScale,
+        gameFullBodySpriteScale: state.gameFullBodySpriteScale,
         textStrokeWidth: state.textStrokeWidth,
         textStrokeColor: state.textStrokeColor,
         visualTheme: state.visualTheme,
@@ -1158,6 +1263,7 @@ export const useUIStore = create<UIState>()(
         impersonateConnectionId: state.impersonateConnectionId,
         impersonateBlockAgents: state.impersonateBlockAgents,
         learnedGameSetupOptions: state.learnedGameSetupOptions,
+        rememberedGameSetupText: state.rememberedGameSetupText,
       }),
     },
   ),

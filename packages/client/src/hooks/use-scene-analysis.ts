@@ -10,7 +10,13 @@
 // ──────────────────────────────────────────────
 
 import { useMutation } from "@tanstack/react-query";
-import type { SceneAnalysis, HudWidget, GameNpc, GameActiveState } from "@marinara-engine/shared";
+import type {
+  SceneAnalysis,
+  HudWidget,
+  GameNpc,
+  GameActiveState,
+  SceneSpotifyTrackCandidate,
+} from "@marinara-engine/shared";
 import { useUIStore } from "../stores/ui.store";
 
 interface AnalyzeSceneInput {
@@ -26,12 +32,14 @@ interface AnalyzeSceneInput {
     currentBackground: string | null;
     currentMusic: string | null;
     recentMusic?: string[];
+    availableSpotifyTracks?: SceneSpotifyTrackCandidate[];
     currentAmbient: string | null;
     currentWeather: string | null;
     currentTimeOfDay: string | null;
     canGenerateBackgrounds?: boolean;
     canGenerateIllustrations?: boolean;
     artStylePrompt?: string | null;
+    imagePromptInstructions?: string | null;
   };
   /** When provided, uses a regular connection instead of sidecar. */
   chatId?: string;

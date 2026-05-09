@@ -55,6 +55,22 @@ Then open **<http://127.0.0.1:7860>**. Everything runs locally.
 
 > `pnpm start` binds to `127.0.0.1` by default. To allow LAN access, set `HOST=0.0.0.0` in `.env` first.
 
+## Optional AI Sprite Background Removal
+
+Marinara can use the open-source [`backgroundremover`](https://github.com/nadermx/backgroundremover) Python tool for stronger transparent sprite cleanup. This is optional because it installs PyTorch and downloads U2Net models.
+
+Install Python 3.11 from [python.org](https://www.python.org/downloads/windows/) first, then run this from the Marinara folder:
+
+```bat
+pnpm backgroundremover:install
+```
+
+The installer creates a local Python venv under `DATA_DIR\background-remover` and Marinara will use it automatically for sprite cleanup. To let `start.bat` install it automatically on first launch, set this in `.env`:
+
+```env
+BACKGROUNDREMOVER_AUTO_INSTALL=true
+```
+
 ## Accessing from Another Device
 
 Want to use Marinara Engine from your phone, tablet, or another computer? See the [FAQ — LAN access](../FAQ.md#how-do-i-access-marinara-engine-from-my-phone-or-another-device) guide.

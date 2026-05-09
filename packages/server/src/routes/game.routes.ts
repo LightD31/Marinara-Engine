@@ -13,6 +13,7 @@ import { createCharactersStorage } from "../services/storage/characters.storage.
 import { createGalleryStorage } from "../services/storage/gallery.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
+import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { fitMessagesToContext, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
@@ -28,7 +29,7 @@ import {
 } from "../services/game/gm-prompts.js";
 import { buildPartySystemPrompt } from "../services/game/party-prompts.js";
 import { buildPromptMacroContext } from "../services/prompt/index.js";
-import { listPartySprites } from "../services/game/sprite.service.js";
+import { listPartySprites, readPreferredFullBodySpriteBase64 } from "../services/game/sprite.service.js";
 import {
   buildSceneAnalyzerSystemPrompt,
   buildSceneAnalyzerUserPrompt,
@@ -120,6 +121,12 @@ import {
   type ImageGenerationSize,
 } from "../services/image/image-generation-settings.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
+import {
+  buildGameSpotifySceneQuery,
+  getGameSpotifyCandidates,
+  getGameSpotifyErrorStatus,
+  playGameSpotifyTrack,
+} from "../services/spotify/game-spotify-music.service.js";
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -247,6 +254,7 @@ function collectIllustrationCharacterAssets(opts: {
   characterNames: string[];
   trackedNpcs: Array<Record<string, unknown>>;
   gameNpcs: GameNpc[];
+  charReferenceByName: Map<string, string>;
   charAvatarByName: Map<string, string>;
   charDescriptionByName: Map<string, string>;
 }): { referenceImages: string[]; characterDescriptions: string[] } {
@@ -276,6 +284,13 @@ function collectIllustrationCharacterAssets(opts: {
   const seen = new Set<string>();
   const described = new Set<string>();
   for (const name of uniqueNames) {
+    const preferredReference = findCharAvatarFuzzy(name, opts.charReferenceByName);
+    if (preferredReference && !seen.has(preferredReference) && references.length < 4) {
+      seen.add(preferredReference);
+      references.push(preferredReference);
+      continue;
+    }
+
     const avatarPath = findCharAvatarFuzzy(name, opts.charAvatarByName) ?? findCharAvatarFuzzy(name, npcAvatarByName);
     const base64 = avatarPath && !seen.has(avatarPath) ? readAvatarBase64(avatarPath) : undefined;
     if (avatarPath && base64 && references.length < 4) {
@@ -329,6 +344,57 @@ function generatedBackgroundSlug(value: string): string {
     slug = slug.replace(prefixPattern, "");
   }
   return slug || "scene";
+}
+
+const BACKGROUND_FALLBACK_IGNORED_WORDS = new Set(["background", "backgrounds", "generated", "user"]);
+const BACKGROUND_FALLBACK_HINT = /default|start|town|village|forest|field|room|interior|corridor|hall|night|day/i;
+
+function backgroundTagScore(requested: string, candidate: string): number {
+  const words = requested
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2 && !BACKGROUND_FALLBACK_IGNORED_WORDS.has(word));
+  const parts = candidate
+    .toLowerCase()
+    .split(/[:_-]+/)
+    .filter((part) => part.length > 1);
+
+  let score = 0;
+  for (const word of words) {
+    for (const part of parts) {
+      if (part.includes(word) || word.includes(part)) {
+        score += word.length;
+        break;
+      }
+    }
+  }
+  return score;
+}
+
+function pickFallbackBackgroundTag(
+  requested: string | undefined | null,
+  manifest: Record<string, { path: string }>,
+): string | null {
+  const tags = Object.keys(manifest).filter(
+    (tag) => tag.startsWith("backgrounds:") && !tag.startsWith("backgrounds:illustrations:"),
+  );
+  if (tags.length === 0) return null;
+
+  const cleaned = requested?.trim() ?? "";
+  if (cleaned) {
+    let bestTag: string | null = null;
+    let bestScore = 0;
+    for (const tag of tags) {
+      const score = backgroundTagScore(cleaned, tag);
+      if (score > bestScore) {
+        bestScore = score;
+        bestTag = tag;
+      }
+    }
+    if (bestTag && bestScore > 0) return bestTag;
+  }
+
+  return tags.find((tag) => BACKGROUND_FALLBACK_HINT.test(tag)) ?? tags[0]!;
 }
 
 function gameImagePromptReviewId(kind: "background" | "illustration" | "portrait", key: string): string {
@@ -393,6 +459,12 @@ const gameSetupConfigSchema = z.object({
   artStylePrompt: z.string().max(500).optional(),
   activeLorebookIds: z.array(z.string()).optional(),
   enableCustomWidgets: z.boolean().optional(),
+  enableSpotifyDj: z.boolean().optional(),
+  spotifySourceType: z.enum(["liked", "playlist", "artist", "any"]).optional(),
+  spotifyPlaylistId: z.string().nullable().optional(),
+  spotifyPlaylistName: z.string().nullable().optional(),
+  spotifyArtist: z.string().nullable().optional(),
+  enableLorebookKeeper: z.boolean().optional(),
   language: z.string().min(1).max(100).optional(),
   generationParameters: generationParametersSchema.partial().optional(),
 });
@@ -2147,6 +2219,42 @@ type SceneAssetNpcAvatarEntry = SceneAssetNpcCandidate & {
 const NARRATION_NPC_SPEECH_VERB_PATTERN =
   "(?:said|says|whispered|whispers|muttered|mutters|replied|replies|called|calls|shouted|shouts|asked|asks|warned|warns|growled|growls|hissed|hisses|exclaimed|exclaims|murmured|murmurs|sighed|sighs|snapped|snaps|barked|barks|declared|declares|continued|continues|added|adds|spoke|speaks|began|begins|remarked|remarks|chuckled|chuckles|laughed|laughs|cried|cries)";
 
+const NARRATION_NPC_REJECT_LABELS = new Set([
+  "one",
+  "someone",
+  "somebody",
+  "anyone",
+  "anybody",
+  "everyone",
+  "everybody",
+  "no one",
+  "nobody",
+  "other",
+  "another",
+  "figure",
+  "voice",
+  "stranger",
+  "man",
+  "woman",
+  "boy",
+  "girl",
+]);
+
+const NARRATION_NPC_REJECT_TOKENS = new Set([
+  "accidentally",
+  "word",
+  "words",
+  "line",
+  "lines",
+  "met",
+  "not",
+  "neutral",
+  "acquired",
+  "used",
+  "lost",
+  "removed",
+]);
+
 function buildGameNpcId(name: string): string {
   const slug = name
     .toLowerCase()
@@ -2177,6 +2285,20 @@ function addExistingNpcAvatar(avatarByName: Map<string, string>, name: unknown, 
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isLikelyNarrationNpcName(rawName: string): boolean {
+  const name = rawName.trim();
+  if (!name || name.length > 48) return false;
+  if (!/^\p{Lu}/u.test(name)) return false;
+  if (/[<>{}\[\]"“”]/u.test(name)) return false;
+
+  const normalized = normalizeJournalMatch(name);
+  if (!normalized || NARRATION_NPC_REJECT_LABELS.has(normalized)) return false;
+
+  const tokens = normalized.split(/\s+/);
+  if (tokens.some((token) => NARRATION_NPC_REJECT_TOKENS.has(token))) return false;
+  return true;
 }
 
 function extractNarrationSnippetForName(narration: string, name: string): string {
@@ -2225,6 +2347,7 @@ function extractNarrationNpcCandidates(narration: string, excludedNames: string[
     while ((match = pattern.exec(narration)) !== null) {
       const rawName = match[1]?.trim();
       if (!rawName) continue;
+      if (!isLikelyNarrationNpcName(rawName)) continue;
 
       const normalizedName = normalizeJournalMatch(rawName);
       if (!normalizedName || excluded.has(normalizedName)) continue;
@@ -2738,7 +2861,39 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     if (setupData.blueprint) {
+      const campaignPlanSchema = z
+        .object({
+          openingSituation: z.string().max(240).optional().default(""),
+          pressureClocks: z
+            .array(
+              z.object({
+                name: z.string().max(80),
+                steps: z.number().int().min(1).max(12).default(4),
+                current: z.number().int().min(0).max(12).default(0),
+                failure: z.string().max(180).default(""),
+              }),
+            )
+            .max(2)
+            .default([]),
+          factions: z
+            .array(
+              z.object({
+                name: z.string().max(80),
+                goal: z.string().max(160),
+                method: z.string().max(160).optional(),
+                secret: z.string().max(180).optional(),
+              }),
+            )
+            .max(2)
+            .default([]),
+          questSeeds: z.array(z.string().max(180)).max(3).default([]),
+          encounterPrinciples: z.array(z.string().max(160)).max(2).default([]),
+        })
+        .optional()
+        .nullable()
+        .transform((plan) => plan ?? undefined);
       const blueprintSchema = z.object({
+        campaignPlan: campaignPlanSchema,
         hudWidgets: z
           .array(
             z.object({
@@ -2856,6 +3011,11 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!sessionChat) throw new Error("Failed to create game session chat");
 
     const sessionMeta = parseMeta(sessionChat.metadata);
+    const setupActiveAgentIds = [
+      ...(setupConfig.enableSpotifyDj ? ["spotify"] : []),
+      ...(setupConfig.enableLorebookKeeper ? ["lorebook-keeper"] : []),
+    ];
+    const spotifySourceType = setupConfig.spotifySourceType ?? "liked";
     const gameChatParameters = mergeStoredGenerationParameters(
       defaultGenerationParameters,
       sessionMeta.chatParameters,
@@ -2885,10 +3045,26 @@ export async function gameRoutes(app: FastifyInstance) {
       gameSceneConnectionId: setupConfig.sceneConnectionId || null,
       gameNpcs: [],
       enableAgents: true,
+      activeAgentIds: setupActiveAgentIds,
       enableSpriteGeneration: setupConfig.enableSpriteGeneration || false,
       gameImageConnectionId: setupConfig.imageConnectionId || null,
       activeLorebookIds: setupConfig.activeLorebookIds || [],
       enableCustomWidgets: setupConfig.enableCustomWidgets !== false,
+      gameUseSpotifyMusic: setupConfig.enableSpotifyDj === true,
+      gameSpotifySourceType: spotifySourceType,
+      gameSpotifyPlaylistId:
+        setupConfig.enableSpotifyDj === true && spotifySourceType === "playlist"
+          ? setupConfig.spotifyPlaylistId || null
+          : null,
+      gameSpotifyPlaylistName:
+        setupConfig.enableSpotifyDj === true && spotifySourceType === "playlist"
+          ? setupConfig.spotifyPlaylistName || null
+          : null,
+      gameSpotifyArtist:
+        setupConfig.enableSpotifyDj === true && spotifySourceType === "artist"
+          ? setupConfig.spotifyArtist || null
+          : null,
+      gameLorebookKeeperEnabled: setupConfig.enableLorebookKeeper === true,
       ...(gameChatParameters ? { chatParameters: gameChatParameters } : {}),
     });
 
@@ -5332,7 +5508,7 @@ export async function gameRoutes(app: FastifyInstance) {
         journal = addInventoryEntry(
           journal,
           data.item as string,
-          data.action as "acquired" | "used" | "lost",
+          data.action as "acquired" | "used" | "lost" | "removed",
           data.quantity as number,
         );
         break;
@@ -5683,6 +5859,91 @@ export async function gameRoutes(app: FastifyInstance) {
     return { raw: cleanRaw };
   });
 
+  const spotifySceneTrackCandidateSchema = z.object({
+    uri: z.string().min(1).max(300),
+    name: z.string().min(1).max(300),
+    artist: z.string().min(1).max(300),
+    album: z.string().max(300).nullable().optional(),
+    position: z.number().nullable().optional(),
+    score: z.number().nullable().optional(),
+  });
+
+  const spotifySceneTrackSelectionSchema = z.object({
+    uri: z.string().min(1).max(300),
+    name: z.string().max(300).nullable().optional(),
+    artist: z.string().max(300).nullable().optional(),
+    album: z.string().max(300).nullable().optional(),
+    reason: z.string().max(500).nullable().optional(),
+  });
+
+  // ── POST /game/spotify/candidates ──
+  // Builds a mechanical shortlist from the configured Spotify source. Scene analysis
+  // then chooses one track from this bounded list, so the model never sees a giant playlist.
+  const spotifyCandidatesSchema = z.object({
+    chatId: z.string().min(1),
+    narration: z.string().max(50000).optional().default(""),
+    playerAction: z.string().max(5000).optional(),
+    context: z.record(z.unknown()).optional().default({}),
+    limit: z.number().min(1).max(50).optional().default(50),
+  });
+
+  app.post("/spotify/candidates", async (req, reply) => {
+    const input = spotifyCandidatesSchema.parse(req.body);
+    const chats = createChatsStorage(app.db);
+    const agents = createAgentsStorage(app.db);
+    const chat = await chats.getById(input.chatId);
+    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+
+    const meta = parseMeta(chat.metadata);
+    const query = buildGameSpotifySceneQuery({
+      narration: input.narration,
+      playerAction: input.playerAction,
+      context: input.context,
+    });
+
+    try {
+      return await getGameSpotifyCandidates({
+        storage: agents,
+        chatMeta: meta,
+        query,
+        limit: input.limit,
+      });
+    } catch (err) {
+      logger.warn(err, "[spotify/game] Failed to build scene music candidates");
+      return reply.status(getGameSpotifyErrorStatus(err)).send({
+        error: err instanceof Error ? err.message : "Spotify candidate selection failed",
+      });
+    }
+  });
+
+  // ── POST /game/spotify/play ──
+  // Plays the track picked by scene analysis in the global Spotify widget.
+  const spotifyPlaySchema = z.object({
+    chatId: z.string().min(1),
+    track: spotifySceneTrackSelectionSchema,
+  });
+
+  app.post("/spotify/play", async (req, reply) => {
+    const input = spotifyPlaySchema.parse(req.body);
+    const chats = createChatsStorage(app.db);
+    const agents = createAgentsStorage(app.db);
+    const chat = await chats.getById(input.chatId);
+    if (!chat) return reply.status(404).send({ error: "Chat not found" });
+
+    try {
+      return await playGameSpotifyTrack({
+        storage: agents,
+        chatMeta: parseMeta(chat.metadata),
+        track: input.track,
+      });
+    } catch (err) {
+      logger.warn(err, "[spotify/game] Failed to play scene music");
+      return reply.status(getGameSpotifyErrorStatus(err)).send({
+        error: err instanceof Error ? err.message : "Spotify playback failed",
+      });
+    }
+  });
+
   // ── POST /game/scene-wrap ──
   // Scene wrap-up using a regular LLM connection (fallback when sidecar isn't available).
   // Uses the same prompt as the sidecar scene analyzer but via API.
@@ -5701,12 +5962,14 @@ export async function gameRoutes(app: FastifyInstance) {
       currentBackground: z.string().nullable(),
       currentMusic: z.string().nullable(),
       recentMusic: z.array(z.string().max(500)).max(20).optional().default([]),
+      availableSpotifyTracks: z.array(spotifySceneTrackCandidateSchema).max(50).optional().default([]),
       currentAmbient: z.string().nullable().optional().default(null),
       currentWeather: z.string().nullable(),
       currentTimeOfDay: z.string().nullable(),
       canGenerateBackgrounds: z.boolean().optional(),
       canGenerateIllustrations: z.boolean().optional(),
       artStylePrompt: z.string().nullable().optional(),
+      imagePromptInstructions: z.string().max(1200).nullable().optional(),
     }),
     /** Override connection (falls back to scene connection → GM connection). */
     connectionId: z.string().optional(),
@@ -5739,6 +6002,10 @@ export async function gameRoutes(app: FastifyInstance) {
     const imgConnId = (meta.gameImageConnectionId as string) || null;
     const setupCfgForScene = meta.gameSetupConfig as Record<string, unknown> | null;
     const artStyleForScene = (setupCfgForScene?.artStylePrompt as string) || "";
+    const imagePromptInstructions =
+      typeof meta.gameImagePromptInstructions === "string"
+        ? meta.gameImagePromptInstructions.trim().slice(0, 1200)
+        : "";
 
     // Compute approximate turn number: count user messages + 1 (current turn)
     const allMsgs = await chats.listMessages(input.chatId);
@@ -5751,6 +6018,7 @@ export async function gameRoutes(app: FastifyInstance) {
       canGenerateIllustrations:
         enableGen && !!imgConnId && isIllustrationAllowed(meta, approxTurnNumber, sessionNumber),
       artStylePrompt: artStyleForScene || null,
+      imagePromptInstructions: imagePromptInstructions || null,
     };
 
     const systemPrompt = buildSceneAnalyzerSystemPrompt(sceneCtx);
@@ -5849,6 +6117,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const ppCtx: PostProcessContext = {
         availableBackgrounds: input.context.availableBackgrounds,
         availableSfx: input.context.availableSfx,
+        availableSpotifyTracks: input.context.availableSpotifyTracks,
         canGenerateBackgrounds: !!sceneCtx.canGenerateBackgrounds,
         validWidgetIds: new Set(
           input.context.activeWidgets
@@ -5941,11 +6210,16 @@ export async function gameRoutes(app: FastifyInstance) {
 
             const charStore = createCharactersStorage(app.db);
             const allChars = await charStore.list();
+            const charReferenceByName = new Map<string, string>();
             const charAvatarByName = new Map<string, string>();
             const charDescriptionByName = new Map<string, string>();
             for (const ch of allChars) {
               try {
                 const parsed = JSON.parse(ch.data) as Record<string, unknown> & { name?: string };
+                const fullBodyReference = parsed.name ? readPreferredFullBodySpriteBase64(ch.id) : null;
+                if (parsed.name && fullBodyReference) {
+                  addNameLookupEntry(charReferenceByName, parsed.name, fullBodyReference.base64);
+                }
                 if (parsed.name && ch.avatarPath) {
                   addNameLookupEntry(charAvatarByName, parsed.name, ch.avatarPath);
                 }
@@ -5965,6 +6239,7 @@ export async function gameRoutes(app: FastifyInstance) {
                 characterNames: input.context.characterNames ?? [],
                 trackedNpcs: (input.context.trackedNpcs ?? []) as Array<Record<string, unknown>>,
                 gameNpcs: (meta.gameNpcs as GameNpc[]) ?? [],
+                charReferenceByName,
                 charAvatarByName,
                 charDescriptionByName,
               });
@@ -5978,6 +6253,7 @@ export async function gameRoutes(app: FastifyInstance) {
                 genre,
                 setting,
                 artStyle,
+                imagePromptInstructions,
                 referenceImages: illustrationAssets.referenceImages,
                 imgSource,
                 imgModel,
@@ -6273,6 +6549,10 @@ export async function gameRoutes(app: FastifyInstance) {
     const genre = (setupCfg?.genre as string) || "";
     const setting = (setupCfg?.setting as string) || "";
     const artStyle = (setupCfg?.artStylePrompt as string) || "";
+    const imagePromptInstructions =
+      typeof meta.gameImagePromptInstructions === "string"
+        ? meta.gameImagePromptInstructions.trim().slice(0, 1200)
+        : "";
 
     const items: Array<{
       id: string;
@@ -6319,11 +6599,16 @@ export async function gameRoutes(app: FastifyInstance) {
       if (isIllustrationAllowed(meta, approxTurnNumber, sessionNumber)) {
         const charStore = createCharactersStorage(app.db);
         const allChars = await charStore.list();
+        const charReferenceByName = new Map<string, string>();
         const charAvatarByName = new Map<string, string>();
         const charDescriptionByName = new Map<string, string>();
         for (const ch of allChars) {
           try {
             const parsed = JSON.parse(ch.data) as Record<string, unknown> & { name?: string };
+            const fullBodyReference = parsed.name ? readPreferredFullBodySpriteBase64(ch.id) : null;
+            if (parsed.name && fullBodyReference) {
+              addNameLookupEntry(charReferenceByName, parsed.name, fullBodyReference.base64);
+            }
             if (parsed.name && ch.avatarPath) {
               addNameLookupEntry(charAvatarByName, parsed.name, ch.avatarPath);
             }
@@ -6342,6 +6627,7 @@ export async function gameRoutes(app: FastifyInstance) {
           characterNames: illustration.characters ?? [],
           trackedNpcs: [],
           gameNpcs: (meta.gameNpcs as GameNpc[]) ?? [],
+          charReferenceByName,
           charAvatarByName,
           charDescriptionByName,
         });
@@ -6355,6 +6641,7 @@ export async function gameRoutes(app: FastifyInstance) {
           genre,
           setting,
           artStyle,
+          imagePromptInstructions,
           referenceImages: illustrationAssets.referenceImages,
           imgSource,
           imgModel,
@@ -6489,13 +6776,23 @@ export async function gameRoutes(app: FastifyInstance) {
         enableGen,
         !!imgConnId,
       );
-      return { generatedBackground: null, generatedIllustration: null, generatedNpcAvatars: [] };
+      return {
+        generatedBackground: null,
+        fallbackBackground: null,
+        generatedIllustration: null,
+        generatedNpcAvatars: [],
+      };
     }
 
     const imgConn = await connections.getWithKey(imgConnId);
     if (!imgConn) {
       logger.info("[game/generate-assets] skipped: image connection %s not found", imgConnId);
-      return { generatedBackground: null, generatedIllustration: null, generatedNpcAvatars: [] };
+      return {
+        generatedBackground: null,
+        fallbackBackground: null,
+        generatedIllustration: null,
+        generatedNpcAvatars: [],
+      };
     }
 
     const imgModel = imgConn.model || "";
@@ -6510,12 +6807,17 @@ export async function gameRoutes(app: FastifyInstance) {
     const genre = (setupCfg?.genre as string) || "";
     const setting = (setupCfg?.setting as string) || "";
     const artStyle = (setupCfg?.artStylePrompt as string) || "";
+    const imagePromptInstructions =
+      typeof meta.gameImagePromptInstructions === "string"
+        ? meta.gameImagePromptInstructions.trim().slice(0, 1200)
+        : "";
     const imageSettings = await loadImageGenerationUserSettings(app.db);
     const backgroundSize: ImageGenerationSize = input.imageSizes?.background ?? imageSettings.background;
     const portraitSize: ImageGenerationSize = input.imageSizes?.portrait ?? imageSettings.portrait;
     const promptOverrideById = new Map((input.promptOverrides ?? []).map((item) => [item.id, item.prompt.trim()]));
 
     let generatedBackground: string | null = null;
+    let fallbackBackground: string | null = null;
     let generatedIllustration: { tag: string; segment?: number } | null = null;
     const generatedNpcAvatars: Array<{ name: string; avatarUrl: string }> = [];
 
@@ -6543,7 +6845,23 @@ export async function gameRoutes(app: FastifyInstance) {
         size: backgroundSize,
         promptOverride,
       });
-      generatedBackground = tag;
+      if (tag) {
+        generatedBackground = tag;
+      } else {
+        fallbackBackground = pickFallbackBackgroundTag(input.backgroundTag, getAssetManifest().assets);
+        if (fallbackBackground) {
+          logger.warn(
+            '[game/generate-assets] background generation failed for "%s"; using fallback "%s"',
+            input.backgroundTag,
+            fallbackBackground,
+          );
+          const latestChat = await chats.getById(input.chatId);
+          if (latestChat) {
+            const latestMeta = parseMeta(latestChat.metadata);
+            await chats.updateMetadata(input.chatId, { ...latestMeta, gameSceneBackground: fallbackBackground });
+          }
+        }
+      }
     }
 
     // ── Generate rare VN illustration ──
@@ -6556,11 +6874,16 @@ export async function gameRoutes(app: FastifyInstance) {
       } else {
         const charStore = createCharactersStorage(app.db);
         const allChars = await charStore.list();
+        const charReferenceByName = new Map<string, string>();
         const charAvatarByName = new Map<string, string>();
         const charDescriptionByName = new Map<string, string>();
         for (const ch of allChars) {
           try {
             const parsed = JSON.parse(ch.data) as Record<string, unknown> & { name?: string };
+            const fullBodyReference = parsed.name ? readPreferredFullBodySpriteBase64(ch.id) : null;
+            if (parsed.name && fullBodyReference) {
+              addNameLookupEntry(charReferenceByName, parsed.name, fullBodyReference.base64);
+            }
             if (parsed.name && ch.avatarPath) {
               addNameLookupEntry(charAvatarByName, parsed.name, ch.avatarPath);
             }
@@ -6581,6 +6904,7 @@ export async function gameRoutes(app: FastifyInstance) {
           characterNames: illustration.characters ?? [],
           trackedNpcs: [],
           gameNpcs: (meta.gameNpcs as GameNpc[]) ?? [],
+          charReferenceByName,
           charAvatarByName,
           charDescriptionByName,
         });
@@ -6594,6 +6918,7 @@ export async function gameRoutes(app: FastifyInstance) {
           genre,
           setting,
           artStyle,
+          imagePromptInstructions,
           referenceImages: illustrationAssets.referenceImages,
           imgSource,
           imgModel,
@@ -6724,19 +7049,24 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     logger.info(
-      "[game/generate-assets] result: bg=%s illustration=%s npcs=%s",
+      "[game/generate-assets] result: bg=%s fallback=%s illustration=%s npcs=%s",
       generatedBackground ?? "none",
+      fallbackBackground ?? "none",
       generatedIllustration?.tag ?? "none",
       generatedNpcAvatars.length,
     );
     if (debugLogsEnabled) {
       debugLog(
         "[debug/game/generate-assets] result payload:\n%s",
-        JSON.stringify({ generatedBackground, generatedIllustration, generatedNpcAvatars }, null, 2),
+        JSON.stringify(
+          { generatedBackground, fallbackBackground, generatedIllustration, generatedNpcAvatars },
+          null,
+          2,
+        ),
       );
     }
 
-    return { generatedBackground, generatedIllustration, generatedNpcAvatars };
+    return { generatedBackground, fallbackBackground, generatedIllustration, generatedNpcAvatars };
   });
 
   // ── POST /game/checkpoint ──

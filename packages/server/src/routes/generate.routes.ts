@@ -20,6 +20,7 @@ import type {
   AgentPhase,
   APIProvider,
   CharacterStat,
+  GameCampaignPlan,
   GameState,
   HapticDeviceCommand,
   PlayerStats,
@@ -42,8 +43,8 @@ import { injectAtDepth } from "../services/lorebook/prompt-injector.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
-import { decryptApiKey, encryptApiKey } from "../utils/crypto.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
+import { resolveSpotifyCredentials } from "../services/spotify/spotify.service.js";
 import {
   assemblePrompt,
   buildPromptMacroContext,
@@ -78,6 +79,7 @@ import {
   type DirectMessageCommand,
   type SceneCommand,
   type HapticCommand,
+  type SpotifyCommand,
   type CreatePersonaCommand,
   type CreateCharacterCommand,
   type UpdateCharacterCommand,
@@ -87,6 +89,10 @@ import {
   type NavigateCommand,
   type FetchCommand,
 } from "../services/conversation/character-commands.js";
+import {
+  ConversationSpotifyCommandError,
+  playConversationSpotifyCommand,
+} from "../services/spotify/conversation-spotify-command.service.js";
 import {
   clearGenerationInProgress,
   markGenerationInProgress,
@@ -171,7 +177,7 @@ import {
   withActiveGameMapMeta,
 } from "../services/game/map-position.service.js";
 import { applyAllSegmentEdits, stripGmCommandTags } from "../services/game/segment-edits.js";
-import { listPartySprites } from "../services/game/sprite.service.js";
+import { listPartySprites, readPreferredFullBodySpriteBase64 } from "../services/game/sprite.service.js";
 import {
   generatePerceptionHints,
   formatPerceptionHints,
@@ -180,22 +186,6 @@ import {
 import { getMoraleTier, formatMoraleContext } from "../services/game/morale.service.js";
 import type { GameMap, GameNpc, LorebookEntry } from "@marinara-engine/shared";
 import { sidecarModelService } from "../services/sidecar/sidecar-model.service.js";
-
-function isEncryptedToken(value: string): boolean {
-  const parts = value.split(":");
-  return (
-    parts.length === 3 &&
-    parts.every((part) => /^[0-9a-f]+$/i.test(part)) &&
-    parts[0]?.length === 24 &&
-    parts[2]?.length === 32
-  );
-}
-
-function decryptStoredToken(value: unknown): string | null {
-  if (typeof value !== "string" || !value) return null;
-  const decrypted = decryptApiKey(value);
-  return decrypted || (isEncryptedToken(value) ? null : value);
-}
 
 function bumpCharacterVersion(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : "";
@@ -452,6 +442,13 @@ function readAvatarBase64(avatarPath: string | null | undefined): string | undef
   }
 }
 
+function readBestCharacterReferenceBase64(
+  characterId: string | null | undefined,
+  avatarPath: string | null | undefined,
+): string | undefined {
+  return readPreferredFullBodySpriteBase64(characterId)?.base64 ?? readAvatarBase64(avatarPath);
+}
+
 function normalizeDmTargetName(value: string): string {
   return value
     .toLowerCase()
@@ -651,6 +648,18 @@ export async function generateRoutes(app: FastifyInstance) {
     if (activeGenerations?.has(input.chatId)) {
       return reply.status(409).send({ error: "A generation is already in progress for this chat" });
     }
+    // Register immediately after the concurrency check. The rest of setup
+    // awaits DB/connection work, so delaying this left a small double-submit
+    // window where two requests for the same chat could both pass the guard.
+    const abortController = new AbortController();
+    if (activeGenerations) {
+      activeGenerations.set(input.chatId, { abortController, backendUrl: null });
+    }
+    const releaseActiveGeneration = () => {
+      if (activeGenerations?.get(input.chatId)?.abortController === abortController) {
+        activeGenerations.delete(input.chatId);
+      }
+    };
 
     // ── Discord webhook URL (parsed once, used for mirroring below) ──
     const earlyMeta = parseExtra(chat.metadata) as Record<string, unknown>;
@@ -726,6 +735,7 @@ export async function generateRoutes(app: FastifyInstance) {
     if (connId === "random") {
       const pool = await connections.listRandomPool();
       if (!pool.length) {
+        releaseActiveGeneration();
         return reply.status(400).send({ error: "No connections are marked for the random pool" });
       }
       const picked = pool[Math.floor(Math.random() * pool.length)];
@@ -733,6 +743,7 @@ export async function generateRoutes(app: FastifyInstance) {
     }
 
     if (!connId) {
+      releaseActiveGeneration();
       return reply.status(400).send({ error: "No API connection configured for this chat" });
     }
     let conn = await connections.getWithKey(connId);
@@ -745,6 +756,7 @@ export async function generateRoutes(app: FastifyInstance) {
       if (connId === "random") {
         const pool = await connections.listRandomPool();
         if (!pool.length) {
+          releaseActiveGeneration();
           return reply.status(400).send({ error: "No connections are marked for the random pool" });
         }
         const picked = pool[Math.floor(Math.random() * pool.length)];
@@ -753,12 +765,14 @@ export async function generateRoutes(app: FastifyInstance) {
       conn = connId ? await connections.getWithKey(connId) : null;
     }
     if (!conn) {
+      releaseActiveGeneration();
       return reply.status(400).send({ error: "API connection not found" });
     }
 
     // Resolve base URL — fall back to provider default if empty
     const baseUrl = resolveBaseUrl(conn);
     if (!baseUrl) {
+      releaseActiveGeneration();
       return reply.status(400).send({ error: "No base URL configured for this connection" });
     }
     const chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
@@ -773,9 +787,6 @@ export async function generateRoutes(app: FastifyInstance) {
       logger.warn(err, "[memory-recall] Embedding source resolution failed; using default embedding path");
     }
 
-    // ── Abort controller: cancel agents when client disconnects ──
-    const abortController = new AbortController();
-    // Register this generation so the /abort endpoint can cancel it
     if (activeGenerations) {
       activeGenerations.set(input.chatId, { abortController, backendUrl: baseUrl });
     }
@@ -1007,11 +1018,12 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // ── Assembler path: use preset if the chat has one ──
-      let presetId = chatMode === "conversation"
-        ? undefined
-        : (input.impersonate && input.impersonatePresetId
+      let presetId =
+        chatMode === "conversation"
+          ? undefined
+          : input.impersonate && input.impersonatePresetId
             ? input.impersonatePresetId
-            : (chat.promptPresetId as string | null) ?? undefined);
+            : ((chat.promptPresetId as string | null) ?? undefined);
       let resolvedPreset = presetId ? await presets.getById(presetId) : null;
       const usingImpersonatePreset = !!(input.impersonate && input.impersonatePresetId);
       if (usingImpersonatePreset && !resolvedPreset) {
@@ -1020,7 +1032,8 @@ export async function generateRoutes(app: FastifyInstance) {
       }
       const usingResolvedImpersonatePreset =
         usingImpersonatePreset && !!resolvedPreset && presetId === input.impersonatePresetId;
-      const impersonatePresetDiffers = usingResolvedImpersonatePreset && input.impersonatePresetId !== chat.promptPresetId;
+      const impersonatePresetDiffers =
+        usingResolvedImpersonatePreset && input.impersonatePresetId !== chat.promptPresetId;
       const impersonateDefaultChoices = impersonatePresetDiffers
         ? (() => {
             try {
@@ -1034,8 +1047,8 @@ export async function generateRoutes(app: FastifyInstance) {
             }
           })()
         : null;
-      const chatChoices: Record<string, string | string[]> = impersonateDefaultChoices
-        ?? (chatMeta.presetChoices ?? {}) as Record<string, string | string[]>;
+      const chatChoices: Record<string, string | string[]> =
+        impersonateDefaultChoices ?? ((chatMeta.presetChoices ?? {}) as Record<string, string | string[]>);
 
       let finalMessages: Array<{
         role: "system" | "user" | "assistant";
@@ -1063,15 +1076,19 @@ export async function generateRoutes(app: FastifyInstance) {
       // Determine whether agents are enabled for this chat (needed by assembler + agent pipeline)
       // Conversation mode chats never run roleplay agents — force agents off.
       logger.info("[generate] chatId=%s, chatMode=%s", input.chatId, chatMode);
+      const gameSpotifyMusicEnabled = chatMode === "game" && chatMeta.gameUseSpotifyMusic === true;
       const chatEnableAgents = shouldEnableAgentsForGeneration({
         chatEnableAgents: chatMeta.enableAgents === true,
         chatMode,
         impersonate: input.impersonate,
         impersonateBlockAgents: input.impersonateBlockAgents,
       });
-      const chatActiveAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds)
+      const persistedChatActiveAgentIds: string[] = Array.isArray(chatMeta.activeAgentIds)
         ? (chatMeta.activeAgentIds as string[])
         : [];
+      const chatActiveAgentIds: string[] = gameSpotifyMusicEnabled
+        ? persistedChatActiveAgentIds.filter((agentId) => agentId !== "spotify")
+        : persistedChatActiveAgentIds;
       const chatActiveLorebookIds: string[] = Array.isArray(chatMeta.activeLorebookIds)
         ? (chatMeta.activeLorebookIds as string[])
         : [];
@@ -1172,87 +1189,87 @@ export async function generateRoutes(app: FastifyInstance) {
       const _tAssemble = Date.now();
       if (presetId && resolvedPreset) {
         const preset = resolvedPreset;
-          wrapFormat = (preset.wrapFormat as "xml" | "markdown" | "none") || "xml";
-          const [sections, groups, choiceBlocks] = await Promise.all([
-            presets.listSections(presetId),
-            presets.listGroups(presetId),
-            presets.listChoiceBlocksForPreset(presetId),
-          ]);
+        wrapFormat = (preset.wrapFormat as "xml" | "markdown" | "none") || "xml";
+        const [sections, groups, choiceBlocks] = await Promise.all([
+          presets.listSections(presetId),
+          presets.listGroups(presetId),
+          presets.listChoiceBlocksForPreset(presetId),
+        ]);
 
-          const assemblerInput: AssemblerInput = {
-            db: app.db,
-            preset: preset as any,
-            sections: sections as any,
-            groups: groups as any,
-            choiceBlocks: choiceBlocks as any,
-            chatChoices,
-            chatId: input.chatId,
-            characterIds: promptCharacterIds,
-            personaId,
-            personaName,
-            personaDescription,
-            personaFields,
-            personaStats: (() => {
-              if (!persona?.personaStats) return undefined;
-              if (typeof persona.personaStats !== "string") return persona.personaStats;
-              try {
-                return JSON.parse(persona.personaStats);
-              } catch {
-                return undefined;
-              }
-            })(),
-            chatMessages: mappedMessages,
-            chatSummary: ((chatMeta.summary as string) ?? "").trim() || null,
-            enableAgents: chatEnableAgents,
-            activeAgentIds: chatActiveAgentIds,
-            activeLorebookIds: chatActiveLorebookIds,
-            lorebookTokenBudget: resolveLorebookTokenBudget(chatMeta),
-            chatEmbedding: chatContextEmbedding,
-            entryStateOverrides:
-              (chatMeta.entryStateOverrides as Record<string, { ephemeral?: number | null; enabled?: boolean }>) ??
-              undefined,
-            entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
-            gameState: chatMode === "game" ? await resolveLatestGameStateForLorebooks(app.db, input.chatId) : null,
-            generationTriggers: lorebookGenerationTriggers,
-            groupScenarioOverrideText:
-              typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
-                ? (chatMeta.groupScenarioText as string).trim()
-                : null,
-          };
+        const assemblerInput: AssemblerInput = {
+          db: app.db,
+          preset: preset as any,
+          sections: sections as any,
+          groups: groups as any,
+          choiceBlocks: choiceBlocks as any,
+          chatChoices,
+          chatId: input.chatId,
+          characterIds: promptCharacterIds,
+          personaId,
+          personaName,
+          personaDescription,
+          personaFields,
+          personaStats: (() => {
+            if (!persona?.personaStats) return undefined;
+            if (typeof persona.personaStats !== "string") return persona.personaStats;
+            try {
+              return JSON.parse(persona.personaStats);
+            } catch {
+              return undefined;
+            }
+          })(),
+          chatMessages: mappedMessages,
+          chatSummary: ((chatMeta.summary as string) ?? "").trim() || null,
+          enableAgents: chatEnableAgents,
+          activeAgentIds: chatActiveAgentIds,
+          activeLorebookIds: chatActiveLorebookIds,
+          lorebookTokenBudget: resolveLorebookTokenBudget(chatMeta),
+          chatEmbedding: chatContextEmbedding,
+          entryStateOverrides:
+            (chatMeta.entryStateOverrides as Record<string, { ephemeral?: number | null; enabled?: boolean }>) ??
+            undefined,
+          entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
+          gameState: chatMode === "game" ? await resolveLatestGameStateForLorebooks(app.db, input.chatId) : null,
+          generationTriggers: lorebookGenerationTriggers,
+          groupScenarioOverrideText:
+            typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
+              ? (chatMeta.groupScenarioText as string).trim()
+              : null,
+        };
 
-          const assembled = await assemblePrompt(assemblerInput);
-          presetHandledLorebooks =
-            presetHasLorebookMarker(sections) ||
-            assembled.lorebookDepthEntriesCount > 0 ||
-            !!assembled.updatedEntryStateOverrides ||
-            assembled.updatedEntryTimingStates !== undefined;
-          finalMessages = assembled.messages;
-          temperature = assembled.parameters.temperature;
-          maxTokens = assembled.parameters.maxTokens;
-          topP = assembled.parameters.topP ?? 1;
-          topK = assembled.parameters.topK ?? 0;
-          frequencyPenalty = assembled.parameters.frequencyPenalty ?? 0;
-          presencePenalty = assembled.parameters.presencePenalty ?? 0;
-          showThoughts = assembled.parameters.showThoughts ?? true;
-          reasoningEffort = assembled.parameters.reasoningEffort ?? null;
-          verbosity = assembled.parameters.verbosity ?? null;
-          assistantPrefill = assembled.parameters.assistantPrefill ?? "";
-          customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
+        const assembled = await assemblePrompt(assemblerInput);
+        presetHandledLorebooks =
+          presetHasLorebookMarker(sections) ||
+          assembled.lorebookDepthEntriesCount > 0 ||
+          !!assembled.updatedEntryStateOverrides ||
+          assembled.updatedEntryTimingStates !== undefined;
+        finalMessages = assembled.messages;
+        temperature = assembled.parameters.temperature;
+        maxTokens = assembled.parameters.maxTokens;
+        topP = assembled.parameters.topP ?? 1;
+        topK = assembled.parameters.topK ?? 0;
+        frequencyPenalty = assembled.parameters.frequencyPenalty ?? 0;
+        presencePenalty = assembled.parameters.presencePenalty ?? 0;
+        showThoughts = assembled.parameters.showThoughts ?? true;
+        reasoningEffort = assembled.parameters.reasoningEffort ?? null;
+        verbosity = assembled.parameters.verbosity ?? null;
+        assistantPrefill = assembled.parameters.assistantPrefill ?? "";
+        customParameters = mergeCustomParameters(customParameters, assembled.parameters.customParameters);
 
-          const presetMaxContext = assembled.parameters.useMaxContext
-            ? knownModelContext
-            : normalizeMaxContext(assembled.parameters.maxContext);
-          effectiveMaxContext = minContextLimit(effectiveMaxContext, presetMaxContext);
+        const presetMaxContext = assembled.parameters.useMaxContext
+          ? knownModelContext
+          : normalizeMaxContext(assembled.parameters.maxContext);
+        effectiveMaxContext = minContextLimit(effectiveMaxContext, presetMaxContext);
 
-          if (assembled.updatedEntryStateOverrides) chatMeta.entryStateOverrides = assembled.updatedEntryStateOverrides;
-          if (assembled.updatedEntryTimingStates) chatMeta.entryTimingStates = assembled.updatedEntryTimingStates;
-          await persistLorebookRuntimeState({
-            chats,
-            chatId: input.chatId,
-            fallbackMeta: chatMeta,
-            entryStateOverrides: assembled.updatedEntryStateOverrides,
-            entryTimingStates: assembled.updatedEntryTimingStates,
-          });
+        if (assembled.updatedEntryStateOverrides) chatMeta.entryStateOverrides = assembled.updatedEntryStateOverrides;
+        if (assembled.updatedEntryTimingStates) chatMeta.entryTimingStates = assembled.updatedEntryTimingStates;
+        await persistLorebookRuntimeState({
+          chats,
+          chatId: input.chatId,
+          fallbackMeta: chatMeta,
+          entryStateOverrides: assembled.updatedEntryStateOverrides,
+          entryTimingStates: assembled.updatedEntryTimingStates,
+        });
       }
 
       // ── Conversation mode: inject built-in DM-style system prompt when no preset ──
@@ -1824,6 +1841,19 @@ export async function generateRoutes(app: FastifyInstance) {
 
           // Check if selfie is enabled for this chat (user picked an image gen connection)
           const hasImageGen = !!chatMeta.imageGenConnectionId;
+          let conversationSpotifyCommandsAvailable = false;
+          if (chatMode === "conversation" && chatMeta.conversationSpotifyCommandsEnabled === true) {
+            try {
+              const spotifyCredentials = await resolveSpotifyCredentials(agentsStore, { refreshSkewMs: 60_000 });
+              if ("accessToken" in spotifyCredentials) {
+                conversationSpotifyCommandsAvailable = true;
+              } else {
+                logger.debug("[spotify/conversation] Song commands disabled: %s", spotifyCredentials.error);
+              }
+            } catch (err) {
+              logger.debug(err, "[spotify/conversation] Failed to check Spotify command availability");
+            }
+          }
 
           const commandLines: string[] = [
             `<commands>`,
@@ -1874,6 +1904,13 @@ export async function generateRoutes(app: FastifyInstance) {
               `   - You invite {{user}} somewhere and they accept → trigger a scene for that activity.`,
               `   - A plan is made (date, trip, hangout, confrontation) and the moment arrives → trigger a scene.`,
               `   Do NOT wait for {{user}} to explicitly ask for a scene. If the conversation implies you and {{user}} are about to DO something together, initiate the scene yourself.`,
+              ``,
+            );
+          }
+
+          if (conversationSpotifyCommandsAvailable) {
+            commandLines.push(
+              `- [spotify: title="Song title", artist="Artist"] - only if you want to play a selected song on the user's active Spotify player. Use this sparingly, when the song choice genuinely fits the moment.`,
               ``,
             );
           }
@@ -2285,8 +2322,10 @@ export async function generateRoutes(app: FastifyInstance) {
             generationTriggers: lorebookGenerationTriggers,
           });
 
-          if (lorebookResult.updatedEntryStateOverrides) chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
-          if (lorebookResult.updatedEntryTimingStates) chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
+          if (lorebookResult.updatedEntryStateOverrides)
+            chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
+          if (lorebookResult.updatedEntryTimingStates)
+            chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
           await persistLorebookRuntimeState({
             chats,
             chatId: input.chatId,
@@ -2340,8 +2379,10 @@ export async function generateRoutes(app: FastifyInstance) {
           generationTriggers: lorebookGenerationTriggers,
         });
 
-        if (lorebookResult.updatedEntryStateOverrides) chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
-        if (lorebookResult.updatedEntryTimingStates) chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
+        if (lorebookResult.updatedEntryStateOverrides)
+          chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
+        if (lorebookResult.updatedEntryTimingStates)
+          chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
         await persistLorebookRuntimeState({
           chats,
           chatId: input.chatId,
@@ -2729,6 +2770,11 @@ export async function generateRoutes(app: FastifyInstance) {
         if (defaultAgentConn) {
           defaultAgentConnectionAgents.push(builtIn.name);
         }
+        const builtInSettings = getDefaultBuiltInAgentSettings(builtIn.id);
+        if (builtIn.id === "spotify" && !Array.isArray(builtInSettings.enabledTools)) {
+          builtInSettings.enabledTools = DEFAULT_AGENT_TOOLS.spotify ?? [];
+        }
+
         resolvedAgents.push({
           id: `builtin:${builtIn.id}`,
           type: builtIn.id,
@@ -2736,11 +2782,12 @@ export async function generateRoutes(app: FastifyInstance) {
           phase: builtIn.phase,
           promptTemplate: "",
           connectionId: defaultAgentConn?.id ?? null,
-          settings: getDefaultBuiltInAgentSettings(builtIn.id),
+          settings: builtInSettings,
           provider: builtInCached?.provider ?? provider,
           model: builtInCached?.model ?? conn.model,
         });
       }
+
       if (defaultAgentConn && defaultAgentConnectionAgents.length > 0) {
         agentConnectionWarnings.push(
           buildDefaultAgentConnectionWarning({
@@ -3072,6 +3119,10 @@ export async function generateRoutes(app: FastifyInstance) {
         const sessionNumber = (chatMeta.gameSessionNumber as number) || 1;
         const storyArc = (chatMeta.gameStoryArc as string) || null;
         const plotTwists = Array.isArray(chatMeta.gamePlotTwists) ? (chatMeta.gamePlotTwists as string[]) : null;
+        const gameBlueprint =
+          chatMeta.gameBlueprint && typeof chatMeta.gameBlueprint === "object" && !Array.isArray(chatMeta.gameBlueprint)
+            ? (chatMeta.gameBlueprint as { campaignPlan?: GameCampaignPlan; hudWidgets?: unknown })
+            : null;
         const gameMap = (chatMeta.gameMap as import("@marinara-engine/shared").GameMap) || null;
         const gameNpcs = Array.isArray(chatMeta.gameNpcs)
           ? (chatMeta.gameNpcs as import("@marinara-engine/shared").GameNpc[])
@@ -3317,13 +3368,14 @@ export async function generateRoutes(app: FastifyInstance) {
           setting: (setupConfig?.setting as string) || "original",
           tone: (setupConfig?.tone as string) || "balanced",
           rating: (setupConfig?.rating as "sfw" | "nsfw") || "sfw",
+          campaignPlan: gameBlueprint?.campaignPlan ?? null,
           gameTime,
           weatherContext,
           playerNotes,
           hudWidgets: Array.isArray(chatMeta.gameWidgetState)
             ? (chatMeta.gameWidgetState as any[])
-            : Array.isArray((chatMeta.gameBlueprint as any)?.hudWidgets)
-              ? ((chatMeta.gameBlueprint as any).hudWidgets as any[])
+            : Array.isArray(gameBlueprint?.hudWidgets)
+              ? (gameBlueprint.hudWidgets as any[])
               : undefined,
           hasSceneModel,
           playerMoved,
@@ -3373,22 +3425,24 @@ export async function generateRoutes(app: FastifyInstance) {
             scanMessages,
             await resolveLatestGameStateForLorebooks(app.db, input.chatId),
             {
-            chatId: input.chatId,
-            characterIds,
-            personaId,
-            activeLorebookIds: chatActiveLorebookIds,
-            tokenBudget: resolveLorebookTokenBudget(chatMeta),
-            chatEmbedding: chatContextEmbedding,
-            entryStateOverrides:
-              (chatMeta.entryStateOverrides as Record<string, { ephemeral?: number | null; enabled?: boolean }>) ??
-              undefined,
-            entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
-            generationTriggers: lorebookGenerationTriggers,
+              chatId: input.chatId,
+              characterIds,
+              personaId,
+              activeLorebookIds: chatActiveLorebookIds,
+              tokenBudget: resolveLorebookTokenBudget(chatMeta),
+              chatEmbedding: chatContextEmbedding,
+              entryStateOverrides:
+                (chatMeta.entryStateOverrides as Record<string, { ephemeral?: number | null; enabled?: boolean }>) ??
+                undefined,
+              entryTimingStates: (chatMeta.entryTimingStates as Record<string, LorebookEntryTimingState>) ?? undefined,
+              generationTriggers: lorebookGenerationTriggers,
             },
           );
 
-          if (lorebookResult.updatedEntryStateOverrides) chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
-          if (lorebookResult.updatedEntryTimingStates) chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
+          if (lorebookResult.updatedEntryStateOverrides)
+            chatMeta.entryStateOverrides = lorebookResult.updatedEntryStateOverrides;
+          if (lorebookResult.updatedEntryTimingStates)
+            chatMeta.entryTimingStates = lorebookResult.updatedEntryTimingStates;
           await persistLorebookRuntimeState({
             chats,
             chatId: input.chatId,
@@ -4465,70 +4519,19 @@ export async function generateRoutes(app: FastifyInstance) {
         return agentResolvedNames.some((name) => spotifyToolNames.has(name));
       });
       const needsSpotify = (enableChatTools && chatAllowsSpotify) || anyAgentAllowsSpotify;
-      // Look beyond resolved agents only to reuse stored Spotify credentials when Spotify tools are allowed.
-      const spotifyAgent = needsSpotify
-        ? (resolvedAgents.find((a) => a.type === "spotify") ??
-          enabledConfigs.find((cfg: any) => cfg.type === "spotify") ??
-          (!enabledConfigs.some((cfg: any) => cfg.type === "spotify")
-            ? (await agentsStore.list()).find((cfg: any) => cfg.type === "spotify")
-            : null))
+      const spotifyAgentId =
+        resolvedAgents.find((agent) => agent.type === "spotify" && !agent.id.startsWith("builtin:"))?.id ??
+        enabledConfigs.find((cfg: any) => cfg.type === "spotify")?.id ??
+        null;
+      const spotifyCredentials = needsSpotify
+        ? await resolveSpotifyCredentials(agentsStore, { agentId: spotifyAgentId, refreshSkewMs: 60_000 })
         : null;
-      let spotifyAccessToken: string | null = null;
-      let spotifyExpiresAt = 0;
-      if (spotifyAgent) {
-        const sSettings =
-          typeof spotifyAgent.settings === "string" ? JSON.parse(spotifyAgent.settings) : spotifyAgent.settings || {};
-        spotifyAccessToken = decryptStoredToken(sSettings.spotifyAccessToken);
-        const spotifyRefreshToken = decryptStoredToken(sSettings.spotifyRefreshToken);
-        const spotifyClientId = (sSettings.spotifyClientId as string) || null;
-        spotifyExpiresAt = (sSettings.spotifyExpiresAt as number) ?? 0;
-
-        if (
-          spotifyRefreshToken &&
-          spotifyClientId &&
-          (!spotifyAccessToken || (spotifyExpiresAt > 0 && Date.now() > spotifyExpiresAt - 60_000)) // Refresh if missing or 1 min before expiry
-        ) {
-          try {
-            const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams({
-                grant_type: "refresh_token",
-                refresh_token: spotifyRefreshToken,
-                client_id: spotifyClientId,
-              }),
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (tokenRes.ok) {
-              const tokens = (await tokenRes.json()) as {
-                access_token: string;
-                refresh_token?: string;
-                expires_in: number;
-              };
-              const refreshedExpiresAt = Date.now() + tokens.expires_in * 1000;
-              spotifyAccessToken = tokens.access_token;
-              spotifyExpiresAt = refreshedExpiresAt;
-              const nextRefreshToken = tokens.refresh_token ?? spotifyRefreshToken;
-              // Persist refreshed tokens in background (don't await)
-              agentsStore
-                .update(spotifyAgent.id, {
-                  settings: {
-                    ...sSettings,
-                    spotifyAccessToken: encryptApiKey(tokens.access_token),
-                    spotifyRefreshToken: nextRefreshToken ? encryptApiKey(nextRefreshToken) : null,
-                    spotifyExpiresAt: refreshedExpiresAt,
-                  },
-                })
-                .catch((err) => logger.warn(err, "[spotify] failed to persist refreshed tokens"));
-            }
-          } catch {
-            /* ignore refresh errors */
-          }
-        }
+      if (spotifyCredentials && !("accessToken" in spotifyCredentials)) {
+        logger.warn("[spotify] credentials unavailable for tool execution: %s", spotifyCredentials.error);
       }
       const spotifyCreds =
-        spotifyAccessToken && (spotifyExpiresAt <= 0 || Date.now() < spotifyExpiresAt)
-          ? { accessToken: spotifyAccessToken }
+        spotifyCredentials && "accessToken" in spotifyCredentials
+          ? { accessToken: spotifyCredentials.accessToken }
           : undefined;
       const searchLorebookForTools = async (query: string, category?: string | null) => {
         const entries = await lorebooksStore.listActiveEntries({
@@ -4573,6 +4576,7 @@ export async function generateRoutes(app: FastifyInstance) {
         gameState: gameState ? (gameState as unknown as Record<string, unknown>) : undefined,
         customTools: customToolDefs,
         spotify: spotifyCreds,
+        spotifyRepeatAfterPlay: gameSpotifyMusicEnabled ? ("track" as const) : undefined,
         searchLorebook: searchLorebookForTools,
         chatMeta,
         onUpdateMetadata: updateChatMetadataForTools,
@@ -6092,7 +6096,13 @@ export async function generateRoutes(app: FastifyInstance) {
               if (markGenerationCommitted && anchoredMsg?.id) {
                 generationComplete = true;
               }
-              return { savedMsg: anchoredMsg, response: "", commands: parsedCommands, oocMessages, characterId: targetCharId };
+              return {
+                savedMsg: anchoredMsg,
+                response: "",
+                commands: parsedCommands,
+                oocMessages,
+                characterId: targetCharId,
+              };
             }
             logger.warn(`[generate] Empty response from model for chat ${input.chatId} (char: ${targetCharId})`);
             reply.raw.write(
@@ -6523,7 +6533,13 @@ export async function generateRoutes(app: FastifyInstance) {
                     mainResponse: combinedResponse,
                   })
                 : { ...agentContext, mainResponse: combinedResponse };
-              const retried = await executeAgent(agentCfg, retryCtx, agentCfg.provider, agentCfg.model);
+              const retried = await executeAgent(
+                agentCfg,
+                retryCtx,
+                agentCfg.provider,
+                agentCfg.model,
+                agentCfg.toolContext,
+              );
               sendAgentEvent(retried);
               retryResults.push(retried);
             } catch {
@@ -7359,7 +7375,8 @@ export async function generateRoutes(app: FastifyInstance) {
 
                     logger.debug(`[illustrator] Starting image generation (${imgWidth}x${imgHeight})...`);
 
-                    // Collect avatar reference images when the setting is enabled
+                    // Collect character reference images when the setting is enabled.
+                    // Prefer saved full-body sprites, then fall back to avatar portraits.
                     const useAvatarRefs = illustratorAgent?.settings?.useAvatarReferences === true;
                     let illustratorRefImages: string[] | undefined;
                     if (useAvatarRefs) {
@@ -7376,22 +7393,25 @@ export async function generateRoutes(app: FastifyInstance) {
                       const includePersona =
                         illCharLower.length === 0 || illCharLower.some((n) => n === personaName.toLowerCase());
 
-                      // Collect avatar reference images for chosen characters + persona
+                      // Collect visual reference images for chosen characters + persona.
                       const refImages: string[] = [];
                       for (const cid of relevantCharIds) {
                         const ci = charInfo.find((c) => c.id === cid);
-                        if (!ci?.avatarPath) continue;
-                        const b64 = readAvatarBase64(ci.avatarPath);
+                        if (!ci) continue;
+                        const b64 = readBestCharacterReferenceBase64(ci.id, ci.avatarPath);
                         if (b64) refImages.push(b64);
                       }
-                      if (includePersona && persona?.avatarPath) {
-                        const personaB64 = readAvatarBase64(persona.avatarPath as string | null);
+                      if (includePersona && persona) {
+                        const personaB64 = readBestCharacterReferenceBase64(
+                          personaId,
+                          persona.avatarPath as string | null,
+                        );
                         if (personaB64) refImages.push(personaB64);
                       }
                       if (refImages.length > 0) {
                         illustratorRefImages = refImages;
                         logger.debug(
-                          `[illustrator] Sending ${refImages.length} avatar reference(s) for: ${illCharLower.length > 0 ? illCharacters.join(", ") : "all characters"}`,
+                          `[illustrator] Sending ${refImages.length} character reference(s) for: ${illCharLower.length > 0 ? illCharacters.join(", ") : "all characters"}`,
                         );
                       }
 
@@ -7984,6 +8004,57 @@ export async function generateRoutes(app: FastifyInstance) {
                   );
                 } else {
                   logger.warn("[commands] Note command used but no connected chat");
+                }
+              }
+
+              if (command.type === "spotify") {
+                // ── Spotify: play a selected track on the user's active Spotify player ──
+                const spotifyCmd = command as SpotifyCommand;
+                if (chatMode !== "conversation" || chatMeta.conversationSpotifyCommandsEnabled !== true) {
+                  logger.debug("[spotify/conversation] Ignored song command because it is disabled for this chat");
+                  continue;
+                }
+                try {
+                  const result = await playConversationSpotifyCommand({
+                    storage: agentsStore,
+                    title: spotifyCmd.title,
+                    artist: spotifyCmd.artist,
+                  });
+                  trySendSseEvent(reply, {
+                    type: "spotify_command",
+                    data: {
+                      title: spotifyCmd.title,
+                      artist: spotifyCmd.artist,
+                      track: result.track,
+                    },
+                  });
+                  logger.info(
+                    '[spotify/conversation] Played "%s" by "%s" for chat %s',
+                    result.track.name,
+                    result.track.artist,
+                    input.chatId,
+                  );
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : "Spotify song command failed.";
+                  trySendSseEvent(reply, {
+                    type: "spotify_command_error",
+                    data: {
+                      title: spotifyCmd.title,
+                      artist: spotifyCmd.artist,
+                      error: message,
+                    },
+                  });
+                  if (err instanceof ConversationSpotifyCommandError) {
+                    logger.warn(
+                      '[spotify/conversation] Song command failed (%d): "%s" by "%s" - %s',
+                      err.status,
+                      spotifyCmd.title,
+                      spotifyCmd.artist,
+                      err.message,
+                    );
+                  } else {
+                    logger.warn(err, "[spotify/conversation] Song command failed");
+                  }
                 }
               }
 

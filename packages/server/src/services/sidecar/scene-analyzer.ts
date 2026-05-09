@@ -14,6 +14,7 @@ import {
   type HudWidget,
   type GameNpc,
   type GameActiveState,
+  type SceneSpotifyTrackCandidate,
 } from "@marinara-engine/shared";
 
 export interface SceneAnalyzerContext {
@@ -37,6 +38,8 @@ export interface SceneAnalyzerContext {
   currentMusic: string | null;
   /** Recently played music tags, most recent first. */
   recentMusic?: string[];
+  /** Spotify tracks preselected mechanically for the scene analyzer to choose from. */
+  availableSpotifyTracks?: SceneSpotifyTrackCandidate[];
   /** Current ambient tag. */
   currentAmbient?: string | null;
   /** Current weather. */
@@ -49,6 +52,8 @@ export interface SceneAnalyzerContext {
   canGenerateBackgrounds?: boolean;
   /** Unified image style for generated game art. */
   artStylePrompt?: string | null;
+  /** Extra user instructions for rare generated scene illustration prompts. */
+  imagePromptInstructions?: string | null;
 }
 
 /** Build the system prompt for scene analysis — kept minimal so all token
@@ -145,6 +150,18 @@ function widgetStateSummary(w: HudWidget): string {
   }
 }
 
+function compactImagePromptInstructions(value: string | null | undefined): string {
+  return (value ?? "").trim().replace(/\s+/g, " ").slice(0, 1200);
+}
+
+function compactPromptLabel(value: string | null | undefined): string {
+  return (value ?? "")
+    .replace(/["\r\n<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
 /** Build the user prompt with all choices inline in a JSON template. */
 export function buildSceneAnalyzerUserPrompt(
   narration: string,
@@ -154,9 +171,11 @@ export function buildSceneAnalyzerUserPrompt(
   const parts: string[] = [];
   const canGenerateIllustrations = !!ctx?.canGenerateIllustrations;
   const canGenerateBackgrounds = !!ctx?.canGenerateBackgrounds;
+  const imagePromptInstructions = compactImagePromptInstructions(ctx?.imagePromptInstructions);
   const musicGenreOptions = [...MUSIC_GENRES, "null"].join(" | ");
   const musicIntensityOptions = [...MUSIC_INTENSITIES, "null"].join(" | ");
   const locationKindOptions = [...LOCATION_KINDS, "null"].join(" | ");
+  const spotifyOptions = (ctx?.availableSpotifyTracks ?? []).slice(0, 50);
 
   // ── 1. Narration (longest — furthest from generation) ──
 
@@ -180,13 +199,29 @@ export function buildSceneAnalyzerUserPrompt(
     );
   }
 
+  if (spotifyOptions.length > 0) {
+    parts.push(
+      ``,
+      `SPOTIFY TRACK OPTIONS:`,
+      ...spotifyOptions.map((track, index) => {
+        const album = track.album ? `, album="${compactPromptLabel(track.album)}"` : "";
+        return `${index + 1}. uri="${track.uri}", title="${compactPromptLabel(track.name)}", artist="${compactPromptLabel(track.artist)}"${album}`;
+      }),
+    );
+  }
+
   // ── 3. Task description + JSON template ──
 
   parts.push(
     ``,
     `TASK: You are the scene director for a visual novel game. Read the narration above and decide:`,
-    `1. SCENE SETTING — Pick the BEST overall background, weather, and time of day that fit the narration. The top-level "background" is the DEFAULT background for this turn. Change it from the current state only if the scene warrants it (new location, mood shift). Use null to keep unchanged.`,
+    `1. SCENE SETTING — Pick the BEST overall background, weather, and time of day that fit the narration. The top-level "background" is the DEFAULT background for this turn. Change it from the current state only if the scene warrants it (new location, mood shift). Use null to keep unchanged. For timeOfDay, use null unless the narration explicitly says time changed or a meaningful amount of time passed.`,
     `2. AUDIO DIRECTION — Choose compact musicGenre/musicIntensity/locationKind hints. Do NOT choose music or ambient file tags; Marinara maps these hints to assets deterministically.`,
+    ...(spotifyOptions.length > 0
+      ? [
+          `   Also pick ONE Spotify track URI from SPOTIFY TRACK OPTIONS that best fits the just-finished turn. Use null only if none fit at all.`,
+        ]
+      : []),
     `3. REPUTATION — If an NPC relationship shifted, note it. Otherwise empty array.`,
     `4. PER-BEAT EFFECTS — Scan each narration beat [0]-[${lines.length - 1}]. For each beat you can optionally add:`,
     `   - "sfx": sound effects (door slam, explosion, footsteps, impact)`,
@@ -214,7 +249,11 @@ export function buildSceneAnalyzerUserPrompt(
     `- Use ONLY the exact tags listed in the template below. If backgrounds:generated:<short-location-slug> is listed, replace <short-location-slug> with a short concrete location slug.`,
     `- Expressions and widget updates are handled by the GM model. Do NOT include them in your output.`,
     `- musicGenre describes scene genre/vibe (fantasy, horror, romance, etc.), not weather. musicIntensity is calm for safe/rest/romance, tense for uncertainty/suspense, intense for combat/chase/climax.`,
+    ...(spotifyOptions.length > 0
+      ? [`- spotifyTrack.uri must be copied exactly from SPOTIFY TRACK OPTIONS. Never invent a Spotify URI.`]
+      : [`- spotifyTrack must be null.`]),
     `- locationKind describes the physical space for ambience: interior, exterior, underground, urban, or nature. Use null if unclear.`,
+    `- timeOfDay is calendar time, not lighting mood. Do NOT change it for indoor shadows, lamps, dark rooms, or atmosphere; keep null unless the story clearly moved to a new time of day.`,
     `- segmentEffects can be an EMPTY array [] when nothing changed.`,
     `- Cinematic directions are spice, not punctuation. Use at most 2 total directions per turn, and never more than 1 direction in any 3-beat span. Prefer none for routine dialogue.`,
     `- Use directions for real visual beats: a door slamming, a blade impact, thunder, a memory fracture, a kiss/reveal close-up, a panic spike, a scene transition, or a major emotional turn. Do not attach directions to every line.`,
@@ -222,6 +261,9 @@ export function buildSceneAnalyzerUserPrompt(
     ...(canGenerateIllustrations
       ? [
           `- Use "illustration" rarely. Most turns MUST keep it null. If you request it, the prompt must describe the exact illustrated moment, visible characters, player POV, mood, lighting, and composition.`,
+          ...(imagePromptInstructions
+            ? [`- When writing "illustration.prompt", obey these user image instructions: ${imagePromptInstructions}`]
+            : []),
           `- "illustration.characters" should list only visible named characters in the image so their reference pictures can be attached.`,
         ]
       : canGenerateBackgrounds
@@ -277,6 +319,7 @@ export function buildSceneAnalyzerUserPrompt(
     `  "musicGenre": "<${musicGenreOptions}>",`,
     `  "musicIntensity": "<${musicIntensityOptions}>",`,
     `  "locationKind": "<${locationKindOptions}>",`,
+    `  "spotifyTrack": ${spotifyOptions.length > 0 ? `null OR {"uri":"<one Spotify URI from SPOTIFY TRACK OPTIONS>","reason":"<brief fit reason>"}` : "null"},`,
     `  "reputationChanges": ${reputationHint},`,
     `  "segmentEffects": [`,
     `    {`,

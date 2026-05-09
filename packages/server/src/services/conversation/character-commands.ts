@@ -11,6 +11,7 @@
 // - [selfie], [selfie: context="description of the selfie"], [selfie: "description"], or [selfie: description]
 // - [memory: target="CharName", summary="description of the memory"]
 // - [scene: scenario="...", background="...", plan="..."] (initiate a mini-roleplay scene)
+// - [spotify: title="Song title", artist="Artist"] (play a song on the user's active Spotify player)
 // - [haptic: action="vibrate", intensity=0.5, duration=3] (haptic device feedback)
 // - <influence>text</influence> (OOC influence for connected roleplay, one-shot)
 // - <note>text</note> (durable note for connected roleplay, persists until cleared)
@@ -93,6 +94,14 @@ export interface HapticCommand {
   intensity?: number;
   /** Duration in seconds */
   duration?: number;
+}
+
+export interface SpotifyCommand {
+  type: "spotify";
+  /** Exact song title to play */
+  title: string;
+  /** Artist name to disambiguate the track */
+  artist: string;
 }
 
 // ── Assistant commands (Professor Mari) ──
@@ -225,6 +234,7 @@ export type CharacterCommand =
   | NoteCommand
   | DirectMessageCommand
   | HapticCommand
+  | SpotifyCommand
   | AssistantCommand;
 
 /** Regex patterns for each command type */
@@ -234,6 +244,7 @@ const SELFIE_RE = /\[selfie(?::\s*(?:context="([^"]*)"|"([^"]*)"|([^\]\r\n"]+)))
 const MEMORY_RE = /\[memory:\s*target="([^"]+)"\s*,\s*summary="([^"]+)"\]/gi;
 const SCENE_RE = /\[scene:\s*([^\]]+)\]/gi;
 const HAPTIC_RE = /\[haptic:\s*([^\]]+)\]/gi;
+const SPOTIFY_RE = /\[spotify:\s*([^\]]+)\]/gi;
 const DIRECT_MESSAGE_RE = /\[dm:\s*([^\]]+)\]/gi;
 const INFLUENCE_RE = /<influence>([\s\S]*?)<\/influence>/gi;
 const NOTE_RE = /<note>([\s\S]*?)<\/note>/gi;
@@ -512,6 +523,16 @@ export function parseCharacterCommands(content: string): {
     commands.push(cmd);
   }
 
+  // Parse Spotify song commands
+  for (const match of content.matchAll(SPOTIFY_RE)) {
+    const params = match[1]!;
+    const title = parseQuotedParam(params, "title");
+    const artist = parseQuotedParam(params, "artist");
+    if (title && artist) {
+      commands.push({ type: "spotify", title, artist });
+    }
+  }
+
   // Parse assistant commands (Professor Mari)
   for (const match of content.matchAll(CREATE_PERSONA_RE)) {
     const params = match[1]!;
@@ -628,6 +649,7 @@ export function parseCharacterCommands(content: string): {
     .replace(MEMORY_RE, "")
     .replace(SCENE_RE, "")
     .replace(HAPTIC_RE, "")
+    .replace(SPOTIFY_RE, "")
     .replace(INFLUENCE_RE, "")
     .replace(NOTE_RE, "")
     .replace(CREATE_PERSONA_RE, "")

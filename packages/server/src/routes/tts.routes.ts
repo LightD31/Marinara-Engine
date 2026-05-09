@@ -337,6 +337,10 @@ function openAiModelSupportsSpeechInstructions(model: string) {
   return /^gpt-4o/i.test(model.trim());
 }
 
+function articleForWord(value: string) {
+  return /^[aeiou]/i.test(value.trim()) ? "an" : "a";
+}
+
 function readProviderErrorDetail(body: string): string {
   if (!body.trim()) return "";
 
@@ -351,13 +355,14 @@ function readProviderErrorDetail(body: string): string {
   }
 }
 
-function buildSpeechInstructions(input: { speaker?: string; tone?: string }) {
+function buildSpeechInstructions(input: { speaker?: string; tone?: string; includeSpeaker?: boolean }) {
   const parts: string[] = [];
-  if (input.speaker?.trim()) {
+  if (input.includeSpeaker !== false && input.speaker?.trim()) {
     parts.push(`Voice the line as ${input.speaker.trim()}.`);
   }
-  if (input.tone?.trim()) {
-    parts.push(`Use a ${input.tone.trim()} tone.`);
+  const tone = input.tone?.trim();
+  if (tone) {
+    parts.push(`Use ${articleForWord(tone)} ${tone} tone.`);
   }
   if (parts.length === 0) return undefined;
   parts.push("Do not read speaker names, brackets, markup, or stage directions aloud.");
@@ -584,8 +589,9 @@ export async function ttsRoutes(app: FastifyInstance) {
           : `${base}/audio/speech`;
     const providerText = cfg.source === "elevenlabs" ? buildElevenLabsTextInput(text, tone) : text;
     const elevenLabsLanguageCode = cfg.elevenLabsLanguageCode?.trim();
+    const includeSpeakerInstructions = cfg.source !== "elevenlabs";
     const speechInstructions = useNanoGptSpeech
-      ? buildSpeechInstructions({ speaker, tone })
+      ? buildSpeechInstructions({ speaker, tone, includeSpeaker: includeSpeakerInstructions })
       : cfg.source === "openai" && openAiModelSupportsSpeechInstructions(cfg.model)
         ? buildSpeechInstructions({ speaker, tone })
         : undefined;

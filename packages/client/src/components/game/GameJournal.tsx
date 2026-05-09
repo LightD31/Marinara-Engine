@@ -36,7 +36,12 @@ interface Journal {
   quests: QuestEntry[];
   locations: string[];
   npcLog: Array<{ npcName: string; interactions: string[] }>;
-  inventoryLog: Array<{ item: string; action: "acquired" | "used" | "lost"; quantity: number; timestamp: string }>;
+  inventoryLog: Array<{
+    item: string;
+    action: "acquired" | "used" | "lost" | "removed";
+    quantity: number;
+    timestamp: string;
+  }>;
 }
 
 interface GameJournalProps {
@@ -113,6 +118,37 @@ function shouldShowNpcDescription(npc: GameNpc): boolean {
   return (npc as GameNpc & { descriptionSource?: string }).descriptionSource === "model" && !!npc.description?.trim();
 }
 
+function shouldShowJournalNpc(npc: GameNpc): boolean {
+  const source = (npc as GameNpc & { descriptionSource?: string }).descriptionSource;
+  const hasReputationChange = Number.isFinite(npc.reputation) && npc.reputation !== 0;
+  const hasRelationshipNotes = Array.isArray(npc.notes) && npc.notes.some((note) => !!note.trim());
+  return source === "model" || hasReputationChange || hasRelationshipNotes;
+}
+
+function isDuplicateInventoryEntry(
+  left: { item: string; action: string; quantity: number; timestamp: string },
+  right: { item: string; action: string; quantity: number; timestamp: string },
+): boolean {
+  if (normalizeNpcName(left.item) !== normalizeNpcName(right.item)) return false;
+  if (left.action !== right.action || left.quantity !== right.quantity) return false;
+  const leftTime = Date.parse(left.timestamp);
+  const rightTime = Date.parse(right.timestamp);
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return true;
+  return Math.abs(leftTime - rightTime) <= 10_000;
+}
+
+function dedupeAdjacentInventoryEntries<T extends { item: string; action: string; quantity: number; timestamp: string }>(
+  items: T[],
+): T[] {
+  const deduped: T[] = [];
+  for (const item of items) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && isDuplicateInventoryEntry(previous, item)) continue;
+    deduped.push(item);
+  }
+  return deduped;
+}
+
 export function GameJournal({ chatId, npcs, onClose, onNpcPortraitClick, onNpcRemove }: GameJournalProps) {
   const [journal, setJournal] = useState<Journal | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("all");
@@ -178,14 +214,16 @@ export function GameJournal({ chatId, npcs, onClose, onNpcPortraitClick, onNpcRe
     [onNpcRemove],
   );
 
+  const journalNpcs = useMemo(() => (npcs ?? []).filter(shouldShowJournalNpc), [npcs]);
+
   const trackedNpcNames = useMemo(() => {
     const names = new Set<string>();
-    for (const npc of npcs ?? []) {
+    for (const npc of journalNpcs) {
       const key = normalizeNpcName(cleanNpcDisplayName(npc.name));
       if (key) names.add(key);
     }
     return names;
-  }, [npcs]);
+  }, [journalNpcs]);
 
   const visibleEntries = useMemo(
     () =>
@@ -246,7 +284,7 @@ export function GameJournal({ chatId, npcs, onClose, onNpcPortraitClick, onNpcRe
         {activeTab === "npcs" && (
           <NpcsView
             npcLog={journal.npcLog}
-            npcs={npcs}
+            npcs={journalNpcs}
             onNpcPortraitClick={onNpcPortraitClick}
             onNpcRemove={onNpcRemove ? handleRemoveNpc : undefined}
             removingNpcName={removingNpcName}
@@ -332,8 +370,8 @@ function NpcsView({
     }
   }
   const entries = [...npcMap.values()].sort((left, right) => {
-    const metDelta = Number(Boolean(right.npc.met)) - Number(Boolean(left.npc.met));
-    if (metDelta !== 0) return metDelta;
+    const repDelta = Math.abs(right.npc.reputation) - Math.abs(left.npc.reputation);
+    if (repDelta !== 0) return repDelta;
     return left.displayName.localeCompare(right.displayName);
   });
 
@@ -342,6 +380,7 @@ function NpcsView({
       {entries.map((entry) => {
         const name = cleanNpcDisplayName(entry.npc.name);
         const rep = reputationLabel(entry.npc.reputation);
+        const showReputation = entry.npc.reputation !== 0;
         const canUploadPortrait = !!onNpcPortraitClick;
         const isRemoving = removingNpcName
           ? normalizeNpcName(cleanNpcDisplayName(removingNpcName)) === normalizeNpcName(name)
@@ -379,15 +418,7 @@ function NpcsView({
                 {entry.npc.emoji ? `${entry.npc.emoji} ` : ""}
                 {name}
               </span>
-              <span
-                className={cn(
-                  "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                  entry.npc.met ? "bg-emerald-400/10 text-emerald-300" : "bg-white/5 text-white/35",
-                )}
-              >
-                {entry.npc.met ? "Met" : "Not Met"}
-              </span>
-              <span className={cn("text-[10px] font-medium", rep.color)}>{rep.text}</span>
+              {showReputation && <span className={cn("text-[10px] font-medium", rep.color)}>{rep.text}</span>}
               {onNpcRemove && (
                 <button
                   type="button"
@@ -431,9 +462,16 @@ function LocationsView({ locations }: { locations: string[] }) {
 function InventoryView({
   items,
 }: {
-  items: Array<{ item: string; action: "acquired" | "used" | "lost"; quantity: number; timestamp: string }>;
+  items: Array<{
+    item: string;
+    action: "acquired" | "used" | "lost" | "removed";
+    quantity: number;
+    timestamp: string;
+  }>;
 }) {
-  if (items.length === 0) {
+  const visibleItems = dedupeAdjacentInventoryEntries(items);
+
+  if (visibleItems.length === 0) {
     return <div className="text-center text-xs text-white/40">No items in inventory log.</div>;
   }
 
@@ -441,11 +479,12 @@ function InventoryView({
     acquired: "text-emerald-400",
     used: "text-amber-400",
     lost: "text-red-400",
+    removed: "text-red-300",
   };
 
   return (
     <div className="flex flex-col gap-1">
-      {[...items].reverse().map((item, i) => (
+      {[...visibleItems].reverse().map((item, i) => (
         <div
           key={i}
           className="flex items-center justify-between rounded-lg border border-white/5 bg-white/3 px-3 py-1.5"

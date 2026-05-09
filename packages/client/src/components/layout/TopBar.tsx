@@ -6,6 +6,7 @@ import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useAgentStore } from "../../stores/agent.store";
 import { cn } from "../../lib/utils";
+import { SpotifyMiniPlayer } from "../spotify/SpotifyMiniPlayer";
 
 const RIGHT_PANEL_BUTTONS = [
   { panel: "lorebooks" as const, icon: BookOpen, label: "Lorebooks", color: "from-amber-400 to-orange-500" },
@@ -36,7 +37,7 @@ export function TopBar() {
       <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border)]/30" />
 
       {/* Left section: window controls + chat info */}
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <button
           onClick={toggleSidebar}
           data-tour="sidebar-toggle"
@@ -56,6 +57,7 @@ export function TopBar() {
         >
           <Home size="1.125rem" />
         </button>
+        <SpotifyMiniPlayer />
       </div>
 
       {/* Right section - Panel toggles */}

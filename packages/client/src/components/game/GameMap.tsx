@@ -145,7 +145,21 @@ interface TimeOfDayIndicatorProps {
 
 function TimeOfDayIndicator({ timeOfDay, size = "desktop", className }: TimeOfDayIndicatorProps) {
   const phase = normalizeTimePhase(timeOfDay);
-  if (!phase) return null;
+  if (!phase) {
+    return (
+      <span
+        className={cn(
+          "relative flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/20 bg-black/55 text-[0.625rem] font-bold leading-none text-white/75 shadow-[0_2px_8px_rgba(0,0,0,0.24)]",
+          size === "mobile" ? "h-3.5 w-6" : "h-4 w-7",
+          className,
+        )}
+        aria-label="Time of day unknown"
+        title="Time of day unknown"
+      >
+        ?
+      </span>
+    );
+  }
 
   const label = getTimePhaseLabel(phase);
   const nightPhase = phase === "night" || phase === "midnight";
@@ -161,7 +175,7 @@ function TimeOfDayIndicator({ timeOfDay, size = "desktop", className }: TimeOfDa
       aria-label={`Time of day: ${label}`}
       title={`Time of day: ${label}`}
     >
-      <span className="absolute inset-x-[12%] bottom-[2px] h-px bg-white/45" />
+      {!nightPhase && <span className="absolute inset-x-[12%] bottom-[2px] h-px bg-white/45" />}
       {nightPhase && (
         <>
           <span className="absolute left-[18%] top-[22%] h-[1.5px] w-[1.5px] rounded-full bg-white/80" />
@@ -186,8 +200,9 @@ function TimeOfDayIndicator({ timeOfDay, size = "desktop", className }: TimeOfDa
   );
 }
 
-interface EditableDayIndicatorProps {
+interface DayTimeIndicatorProps {
   day?: number | null;
+  timeOfDay?: string | null;
   onDayChange?: (day: number) => void;
   size?: "desktop" | "mobile";
   className?: string;
@@ -199,11 +214,31 @@ function normalizeDayInput(value: string): number | null {
   return Math.max(1, Math.min(9999, parsed));
 }
 
-function EditableDayIndicator({ day, onDayChange, size = "desktop", className }: EditableDayIndicatorProps) {
+function getTimeOfDayStatusLabel(timeOfDay?: string | null): string {
+  const phase = normalizeTimePhase(timeOfDay);
+  return phase ? `Time of day: ${getTimePhaseLabel(phase)}` : "Time of day unknown";
+}
+
+function DayTimeIndicator({ day, timeOfDay, onDayChange, size = "desktop", className }: DayTimeIndicatorProps) {
   const safeDay = Math.max(1, Math.floor(day ?? 1));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(safeDay));
   const skipCommitRef = useRef(false);
+  const timeLabel = getTimeOfDayStatusLabel(timeOfDay);
+  const rootClassName = cn(
+    "inline-flex shrink-0 items-stretch overflow-hidden rounded-full border border-white/20 bg-black/55 text-white/85 shadow-[0_2px_8px_rgba(0,0,0,0.2)]",
+    size === "mobile" ? "h-7 text-[0.6875rem]" : "h-5 text-[0.625rem]",
+    className,
+  );
+  const dayClassName = cn(
+    "flex items-center justify-center font-semibold leading-none",
+    size === "mobile" ? "min-w-14 px-2.5" : "min-w-11 px-1.5",
+  );
+  const dividerClassName = cn("my-auto w-px shrink-0 bg-white/20", size === "mobile" ? "h-5" : "h-3.5");
+  const timeClassName = cn(
+    "h-full rounded-l-none rounded-r-full border-0 shadow-none",
+    size === "mobile" ? "w-8" : "w-7",
+  );
 
   useEffect(() => {
     if (!editing) setDraft(String(safeDay));
@@ -229,9 +264,11 @@ function EditableDayIndicator({ day, onDayChange, size = "desktop", className }:
   if (editing) {
     return (
       <div
-        className={cn("shrink-0", className)}
+        className={cn(rootClassName, "focus-within:ring-2 focus-within:ring-white/35")}
         onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => event.stopPropagation()}
+        title={`Day ${safeDay}. ${timeLabel}.`}
+        aria-label={`Day ${safeDay}. ${timeLabel}.`}
       >
         <input
           autoFocus
@@ -253,11 +290,13 @@ function EditableDayIndicator({ day, onDayChange, size = "desktop", className }:
             }
           }}
           className={cn(
-            "rounded-full border border-white/20 bg-black/70 px-1.5 text-center font-semibold text-white outline-none focus:border-white/50",
-            size === "mobile" ? "h-7 w-14 text-[0.6875rem]" : "h-5 w-12 text-[0.625rem]",
+            "h-full bg-transparent text-center font-semibold text-white outline-none",
+            size === "mobile" ? "w-14 px-2.5 text-[0.6875rem]" : "w-11 px-1.5 text-[0.625rem]",
           )}
           aria-label="Edit game day"
         />
+        <span className={dividerClassName} aria-hidden="true" />
+        <TimeOfDayIndicator timeOfDay={timeOfDay} size={size} className={timeClassName} />
       </div>
     );
   }
@@ -271,14 +310,15 @@ function EditableDayIndicator({ day, onDayChange, size = "desktop", className }:
       }}
       onPointerDown={(event) => event.stopPropagation()}
       className={cn(
-        "shrink-0 rounded-full border border-white/20 bg-black/55 font-semibold text-white/85 shadow-[0_2px_8px_rgba(0,0,0,0.2)] transition-colors hover:bg-black/75 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/35",
-        size === "mobile" ? "px-2.5 py-1.5 text-[0.6875rem]" : "px-1.5 py-0.5 text-[0.625rem]",
-        className,
+        rootClassName,
+        "transition-colors hover:bg-black/75 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/35",
       )}
-      title={`Day ${safeDay}. Tap to edit.`}
-      aria-label={`Day ${safeDay}. Tap to edit.`}
+      title={`Day ${safeDay}. ${timeLabel}. Tap to edit day.`}
+      aria-label={`Day ${safeDay}. ${timeLabel}. Tap to edit day.`}
     >
-      Day {safeDay}
+      <span className={dayClassName}>Day {safeDay}</span>
+      <span className={dividerClassName} aria-hidden="true" />
+      <TimeOfDayIndicator timeOfDay={timeOfDay} size={size} className={timeClassName} />
     </button>
   );
 }
@@ -526,8 +566,7 @@ export function GameMapPanel({
                 )}
               </span>
             )}
-            <EditableDayIndicator day={day} onDayChange={onDayChange} />
-            <TimeOfDayIndicator timeOfDay={timeOfDay} />
+            <DayTimeIndicator day={day} timeOfDay={timeOfDay} onDayChange={onDayChange} />
           </div>
         )}
         <span className="block min-w-0 flex-1 overflow-hidden text-center font-semibold text-[var(--foreground)]">
@@ -695,7 +734,7 @@ export function MobileMapButton({
         >
           <MapIcon size={18} />
         </button>
-        <EditableDayIndicator day={day} onDayChange={onDayChange} size="mobile" />
+        <DayTimeIndicator day={day} timeOfDay={timeOfDay} onDayChange={onDayChange} size="mobile" />
       </div>
 
       {/* Modal overlay */}
@@ -714,8 +753,7 @@ export function MobileMapButton({
             {/* Header */}
             <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
               <StateIcon size={14} className={stateCfg?.color ?? "text-white/60"} />
-              <EditableDayIndicator day={day} onDayChange={onDayChange} size="mobile" />
-              <TimeOfDayIndicator timeOfDay={timeOfDay} />
+              <DayTimeIndicator day={day} timeOfDay={timeOfDay} onDayChange={onDayChange} size="mobile" />
               <div className="min-w-0 flex-1 overflow-hidden">
                 <p className="block overflow-hidden whitespace-nowrap text-sm font-bold text-[var(--foreground)]">
                   {(map?.name || "Map").length > 18 ? (

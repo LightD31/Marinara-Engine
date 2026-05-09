@@ -109,6 +109,26 @@ The upstream tracker is [wolfi-dev/os#78694](https://github.com/wolfi-dev/os/iss
 
 ---
 
+## Sprite Background Cleanup Still Leaves White Panels
+
+The built-in sprite cleanup is a matte remover. It works for simple white backgrounds, but generated sprite sheets can contain disconnected white panels, shadows, gutters, or white clothing/hair that are hard to separate with thresholds.
+
+For stronger cleanup, install the optional open-source AI background remover:
+
+```bash
+pnpm backgroundremover:install
+```
+
+Then restart Marinara and click **Reapply Cleanup** in the sprite generation review screen. If install fails:
+
+- Make sure Python 3.9-3.11 is installed (`python3 --version` or `py -3.11 --version` on Windows). Python 3.12+ may force native `numba`/`llvmlite` builds on some machines.
+- Rebuild the runtime with `pnpm backgroundremover:reinstall`.
+- Set `SPRITE_BACKGROUND_REMOVAL_ENGINE=builtin` to force the old built-in cleanup while troubleshooting.
+- First use may take longer because `backgroundremover` downloads U2Net model files into `DATA_DIR/background-remover/models`.
+- If logs mention a corrupted U2Net model, delete the reported `.pth` cache file and retry. Marinara pins its own cache under `DATA_DIR/background-remover/models` and retries once automatically if that managed cache is incomplete.
+
+---
+
 ## Still Stuck?
 
 - Check the [open issues](https://github.com/Pasta-Devs/Marinara-Engine/issues) on GitHub.

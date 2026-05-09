@@ -494,6 +494,23 @@ export function useUpdateMessageExtra(chatId: string | null) {
   });
 }
 
+function replaceCachedMessage(
+  old: InfiniteData<Message[]> | undefined,
+  messageId: string,
+  updater: (message: Message) => Message,
+): InfiniteData<Message[]> | undefined {
+  if (!old?.pages) return old;
+  let changed = false;
+  const pages = old.pages.map((page) =>
+    page.map((msg) => {
+      if (msg.id !== messageId) return msg;
+      changed = true;
+      return updater(msg);
+    }),
+  );
+  return changed ? { ...old, pages } : old;
+}
+
 /** Peek at the assembled prompt for a chat */
 export function usePeekPrompt() {
   return useMutation({
@@ -611,11 +628,31 @@ export function useSetActiveSwipe(chatId: string | null) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ messageId, index }: { messageId: string; index: number }) =>
-      api.put<Message>(`/chats/${chatId}/messages/${messageId}/active-swipe`, { index }),
-    onSuccess: () => {
-      if (chatId) {
+      api.put<Message | null>(`/chats/${chatId}/messages/${messageId}/active-swipe`, { index }),
+    onMutate: async ({ messageId, index }) => {
+      if (!chatId) return;
+      await qc.cancelQueries({ queryKey: chatKeys.messages(chatId), exact: true });
+      const previous = qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId));
+      qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) =>
+        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, activeSwipeIndex: index })),
+      );
+      return { previous };
+    },
+    onSuccess: (updated, { messageId }) => {
+      if (!chatId) return;
+      if (!updated) {
         qc.invalidateQueries({ queryKey: chatKeys.messages(chatId) });
         qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+        return;
+      }
+      qc.setQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId), (old) =>
+        replaceCachedMessage(old, messageId, (msg) => ({ ...msg, ...updated })),
+      );
+      qc.invalidateQueries({ queryKey: lorebookKeys.active(chatId) });
+    },
+    onError: (_err, _vars, context) => {
+      if (chatId && context?.previous) {
+        qc.setQueryData(chatKeys.messages(chatId), context.previous);
       }
     },
   });

@@ -2,18 +2,23 @@ import type { FastifyInstance } from "fastify";
 import { logger } from "../../lib/logger.js";
 import {
   BUILT_IN_AGENTS,
+  BUILT_IN_TOOLS,
+  DEFAULT_AGENT_TOOLS,
   getDefaultBuiltInAgentSettings,
   type AgentContext,
   type AgentResult,
+  type GameMap,
 } from "@marinara-engine/shared";
 import { eq } from "drizzle-orm";
 import { listCharacterSprites } from "../../services/game/sprite.service.js";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import type { ResolvedAgent } from "../../services/agents/agent-pipeline.js";
 import { executeAgent, executeAgentBatch, normalizeAgentContextSize } from "../../services/agents/agent-executor.js";
+import type { LLMToolDefinition } from "../../services/llm/base-provider.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../../services/llm/local-sidecar.js";
 import { createLLMProvider } from "../../services/llm/provider-registry.js";
 import { sidecarModelService } from "../../services/sidecar/sidecar-model.service.js";
+import { resolveSpotifyCredentials } from "../../services/spotify/spotify.service.js";
 import { createAgentsStorage } from "../../services/storage/agents.storage.js";
 import { createCharactersStorage } from "../../services/storage/characters.storage.js";
 import { createChatsStorage } from "../../services/storage/chats.storage.js";
@@ -47,7 +52,7 @@ import {
   normalizeSecretPlotSceneDirections,
   normalizeStringArray,
 } from "./agent-normalizers.js";
-import type { GameMap } from "@marinara-engine/shared";
+import { executeToolCalls } from "../../services/tools/tool-executor.js";
 
 type PersonaContext = {
   personaId: string | null;
@@ -74,6 +79,21 @@ type ResolvedRetryAgents = {
 
 function parseJsonIfString<T>(value: T | string): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+function parseSettingsRecord(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 async function resolvePersonaContext(
@@ -341,6 +361,24 @@ async function buildRetryAgentContext(args: {
     }
   }
 
+  if (resolvedAgentTypes.has("spotify") && ((chat as any).mode ?? "conversation") === "game") {
+    const sourceType = typeof chatMeta.gameSpotifySourceType === "string" ? chatMeta.gameSpotifySourceType : "liked";
+    if (chatMeta.gameUseSpotifyMusic === true) {
+      agentContext.memory._spotifyDjConstraints = {
+        mode: "game",
+        replaceBuiltInMusic: true,
+        manualRetry: true,
+        forceFreshPick: true,
+        sourceType,
+        playlistId: typeof chatMeta.gameSpotifyPlaylistId === "string" ? chatMeta.gameSpotifyPlaylistId : null,
+        playlistName: typeof chatMeta.gameSpotifyPlaylistName === "string" ? chatMeta.gameSpotifyPlaylistName : null,
+        artist: typeof chatMeta.gameSpotifyArtist === "string" ? chatMeta.gameSpotifyArtist : null,
+        note:
+          "This is a manual Spotify DJ retry from game mode. Pick a fresh fitting track now and call spotify_play unless Spotify playback is unavailable; do not keep the current track merely because it still fits.",
+      };
+    }
+  }
+
   return agentContext;
 }
 
@@ -530,6 +568,411 @@ function retryProviderKey(provider: unknown): string {
   return `provider:${id}`;
 }
 
+function toLLMToolDefinition(toolName: string): LLMToolDefinition | null {
+  const tool = BUILT_IN_TOOLS.find((entry) => entry.name === toolName);
+  if (!tool) return null;
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters as unknown as Record<string, unknown>,
+    },
+  };
+}
+
+async function attachRetrySpotifyToolContexts(args: {
+  agentsStore: ReturnType<typeof createAgentsStorage>;
+  resolvedAgents: ResolvedRetryAgent[];
+}) {
+  const { agentsStore, resolvedAgents } = args;
+  const spotifyToolNames = new Set(DEFAULT_AGENT_TOOLS.spotify ?? []);
+  let spotifyAccessToken: string | null = null;
+  let spotifyError: string | null = null;
+  let spotifyCredentialsResolved = false;
+
+  for (const entry of resolvedAgents) {
+    if (entry.resolved.toolContext?.tools.length) continue;
+    const settings = parseSettingsRecord(entry.resolved.settings);
+    const enabledNames = Array.isArray(settings.enabledTools) ? (settings.enabledTools as string[]) : [];
+    const spotifyEnabledNames =
+      entry.resolved.type === "spotify" && enabledNames.length === 0
+        ? [...spotifyToolNames]
+        : enabledNames.filter((name) => spotifyToolNames.has(name));
+    if (spotifyEnabledNames.length === 0) continue;
+
+    const tools = spotifyEnabledNames
+      .map((name) => toLLMToolDefinition(name))
+      .filter((tool): tool is LLMToolDefinition => tool !== null);
+    if (tools.length === 0) continue;
+
+    if (!spotifyCredentialsResolved) {
+      spotifyCredentialsResolved = true;
+      const credentials = await resolveSpotifyCredentials(agentsStore, { agentId: entry.resolved.id });
+      if ("accessToken" in credentials) {
+        spotifyAccessToken = credentials.accessToken;
+      } else {
+        spotifyError = credentials.error;
+        logger.warn("[retry-agents] Spotify credentials unavailable: %s", credentials.error);
+      }
+    }
+
+    const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
+    if (entry.resolved.type === "spotify") {
+      entry.resolved.phase = "post_processing";
+      entry.resolved.settings = {
+        ...settings,
+        enabledTools: spotifyEnabledNames,
+      };
+      (entry.resolved as any).__spotifyToolCalls = new Set<string>();
+      (entry.resolved as any).__spotifyPlayApplied = false;
+      (entry.resolved as any).__spotifyPlayError = null;
+    }
+    entry.resolved.toolContext = {
+      tools,
+      executeToolCall: async (call) => {
+        const spotifyToolCalls = (entry.resolved as any).__spotifyToolCalls;
+        if (spotifyToolCalls instanceof Set) {
+          spotifyToolCalls.add(call.function.name);
+        }
+        if (!allowedToolNames.has(call.function.name)) {
+          return JSON.stringify({
+            error: `Tool not allowed for agent ${entry.resolved.type}: ${call.function.name}`,
+            allowed: Array.from(allowedToolNames),
+          });
+        }
+        if (!spotifyAccessToken) {
+          return JSON.stringify({
+            error: spotifyError ?? "Spotify is not connected. Open the Spotify DJ agent and connect your account.",
+          });
+        }
+        if (call.function.name === "spotify_play") {
+          const beforeResults = await executeToolCalls(
+            [
+              {
+                id: `spotify-before-play-${Date.now()}`,
+                type: "function",
+                function: { name: "spotify_get_current_playback", arguments: "{}" },
+              },
+            ],
+            { spotify: { accessToken: spotifyAccessToken } },
+          );
+          try {
+            const before = JSON.parse(beforeResults[0]?.result ?? "{}");
+            (entry.resolved as any).__spotifyCurrentBeforePlayUri = getSpotifyPlaybackTrackUri(before);
+          } catch {
+            (entry.resolved as any).__spotifyCurrentBeforePlayUri = null;
+          }
+        }
+        const results = await executeToolCalls([call], {
+          spotify: { accessToken: spotifyAccessToken },
+          spotifyRepeatAfterPlay: "track",
+        });
+        const result = results[0]?.result ?? "Tool execution failed";
+        if (call.function.name === "spotify_play") {
+          try {
+            const parsed = JSON.parse(result) as Record<string, unknown>;
+            if (parsed.applied === true) {
+              (entry.resolved as any).__spotifyPlayApplied = true;
+              (entry.resolved as any).__spotifyPlayError = null;
+              (entry.resolved as any).__spotifyPlayUris = getSpotifyTrackUris(parsed);
+              (entry.resolved as any).__spotifyCurrentAfterPlayUri = getSpotifyPlaybackTrackUri(parsed);
+              (entry.resolved as any).__spotifyRepeatAfterPlayState =
+                getStringField(parsed, "repeatState") || getStringField(parsed, "repeat");
+            } else if (typeof parsed.error === "string") {
+              (entry.resolved as any).__spotifyPlayError = parsed.error;
+            }
+          } catch {
+            // Keep the raw tool result for the model; validation below handles missing playback.
+          }
+        }
+        return result;
+      },
+    };
+  }
+}
+
+function getSpotifyTrackUris(data: unknown): string[] {
+  if (!data || typeof data !== "object") return [];
+  const record = data as Record<string, unknown>;
+  const raw =
+    (Array.isArray(record.trackUris) && record.trackUris) ||
+    (Array.isArray(record.uris) && record.uris) ||
+    (typeof record.trackUri === "string" ? [record.trackUri] : null) ||
+    (typeof record.uri === "string" ? [record.uri] : null) ||
+    [];
+  return raw.filter((uri): uri is string => typeof uri === "string" && uri.startsWith("spotify:"));
+}
+
+function getSpotifyPlaybackTrackUri(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.currentUri === "string" && record.currentUri.startsWith("spotify:track:")) {
+    return record.currentUri;
+  }
+  const track = record.track;
+  if (track && typeof track === "object") {
+    const uri = (track as Record<string, unknown>).uri;
+    if (typeof uri === "string" && uri.startsWith("spotify:track:")) return uri;
+  }
+  return null;
+}
+
+function getStringField(data: unknown, key: string): string {
+  if (!data || typeof data !== "object") return "";
+  const value = (data as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+async function executeSpotifyRetryToolJson(
+  entry: ResolvedRetryAgent,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!entry.resolved.toolContext) return { error: "Spotify tool context is unavailable." };
+  const raw = await entry.resolved.toolContext.executeToolCall({
+    id: `spotify-retry-${name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    type: "function",
+    function: {
+      name,
+      arguments: JSON.stringify(args),
+    },
+  });
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : { raw };
+  } catch {
+    return { raw };
+  }
+}
+
+function getSpotifyTracks(data: Record<string, unknown>): Array<{ uri: string; name: string; artist: string }> {
+  const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+  return tracks
+    .map((track) => {
+      if (!track || typeof track !== "object") return null;
+      const record = track as Record<string, unknown>;
+      const uri = typeof record.uri === "string" ? record.uri : "";
+      if (!uri.startsWith("spotify:track:")) return null;
+      return {
+        uri,
+        name: typeof record.name === "string" ? record.name : "Unknown track",
+        artist: typeof record.artist === "string" ? record.artist : "",
+      };
+    })
+    .filter((track): track is { uri: string; name: string; artist: string } => track !== null);
+}
+
+function buildSpotifyRetryQuery(result: AgentResult, context: AgentContext): { query: string; mood: string } {
+  const mood = getStringField(result.data, "mood");
+  const searchQuery = getStringField(result.data, "searchQuery");
+  const scene = typeof context.mainResponse === "string" ? context.mainResponse.replace(/\[[^\]]+\]/g, " ") : "";
+  const compactScene = scene.replace(/\s+/g, " ").trim().slice(0, 600);
+  return {
+    query: [searchQuery, mood, compactScene].filter(Boolean).join(" "),
+    mood,
+  };
+}
+
+async function applyDeterministicSpotifyRetryFallback(args: {
+  entry: ResolvedRetryAgent;
+  result: AgentResult;
+  context: AgentContext;
+  constraints: Record<string, unknown>;
+}): Promise<AgentResult> {
+  const { entry, result, context, constraints } = args;
+  if (!entry.resolved.toolContext) {
+    return { ...result, success: false, error: "Spotify tool context is unavailable." };
+  }
+
+  const { query, mood } = buildSpotifyRetryQuery(result, context);
+  const current = await executeSpotifyRetryToolJson(entry, "spotify_get_current_playback", {});
+  const currentUri = getSpotifyPlaybackTrackUri(current) ?? "";
+
+  const artist = typeof constraints.artist === "string" ? constraints.artist.trim() : "";
+  const sourceType = typeof constraints.sourceType === "string" ? constraints.sourceType : "liked";
+  const playlistId =
+    typeof constraints.playlistId === "string" && constraints.playlistId.trim()
+      ? constraints.playlistId.trim()
+      : sourceType === "playlist"
+        ? ""
+        : "liked";
+
+  let sourceResult: Record<string, unknown>;
+  if (artist) {
+    sourceResult = await executeSpotifyRetryToolJson(entry, "spotify_search", {
+      query: [`artist:"${artist}"`, query || mood || "instrumental scene music"].filter(Boolean).join(" "),
+      limit: 20,
+    });
+  } else {
+    sourceResult = await executeSpotifyRetryToolJson(entry, "spotify_get_playlist_tracks", {
+      playlistId: playlistId || "liked",
+      query: query || mood || "scene instrumental",
+      mood: mood || undefined,
+      candidateLimit: 40,
+    });
+  }
+
+  const tracks = getSpotifyTracks(sourceResult);
+  if (tracks.length === 0) {
+    const sourceError = typeof sourceResult.error === "string" ? sourceResult.error : "No Spotify candidates found.";
+    return { ...result, success: false, error: sourceError };
+  }
+
+  const picked = tracks.find((track) => track.uri !== currentUri) ?? tracks[0]!;
+  const play = await executeSpotifyRetryToolJson(entry, "spotify_play", {
+    uri: picked.uri,
+    reason: "Manual Spotify DJ retry fallback",
+  });
+  if (play.applied !== true) {
+    const playError = typeof play.error === "string" ? play.error : "Spotify play did not apply playback.";
+    return { ...result, success: false, error: playError };
+  }
+  const playedUri = getSpotifyPlaybackTrackUri(play);
+  if (playedUri !== picked.uri) {
+    return {
+      ...result,
+      success: false,
+      error: "Spotify accepted the retry, but the active track did not change to the selected song.",
+    };
+  }
+  const repeatState = getStringField(play, "repeatState") || getStringField(play, "repeat");
+  if (repeatState && repeatState !== "track") {
+    return {
+      ...result,
+      success: false,
+      error: `Spotify accepted the retry, but repeat-track did not stick (current repeat: ${repeatState}).`,
+    };
+  }
+
+  return {
+    ...result,
+    success: true,
+    error: null,
+    data: {
+      action: "play",
+      mood: mood || null,
+      searchQuery: query || null,
+      trackUris: [picked.uri],
+      trackNames: [`${picked.name}${picked.artist ? ` — ${picked.artist}` : ""}`],
+      volume: null,
+      deterministicFallbackApplied: true,
+      repeat: play.repeat ?? null,
+      repeatState: repeatState || null,
+      currentUri: playedUri ?? null,
+    },
+  };
+}
+
+async function validateSpotifyRetryPlayback(
+  entry: ResolvedRetryAgent,
+  result: AgentResult,
+  context: AgentContext,
+): Promise<AgentResult> {
+  if (entry.resolved.type !== "spotify") return result;
+
+  const constraints =
+    context.memory._spotifyDjConstraints && typeof context.memory._spotifyDjConstraints === "object"
+      ? (context.memory._spotifyDjConstraints as Record<string, unknown>)
+      : {};
+  const forceFreshPick = constraints.manualRetry === true || constraints.forceFreshPick === true;
+  if (!forceFreshPick) return result;
+
+  const toolCalls = (entry.resolved as any).__spotifyToolCalls;
+  const spotifyPlayCalled = toolCalls instanceof Set && toolCalls.has("spotify_play");
+  const spotifyPlayApplied = (entry.resolved as any).__spotifyPlayApplied === true;
+  const spotifyPlayError = (entry.resolved as any).__spotifyPlayError;
+  const spotifyPlayUris = Array.isArray((entry.resolved as any).__spotifyPlayUris)
+    ? ((entry.resolved as any).__spotifyPlayUris as string[])
+    : [];
+  const spotifyPlayUri = spotifyPlayUris.length === 1 ? spotifyPlayUris[0] : null;
+  const spotifyPlayIsSingleTrack = !!spotifyPlayUri && spotifyPlayUri.startsWith("spotify:track:");
+  const currentBeforePlay = (entry.resolved as any).__spotifyCurrentBeforePlayUri;
+  const currentAfterPlay = (entry.resolved as any).__spotifyCurrentAfterPlayUri;
+  const repeatAfterPlay = (entry.resolved as any).__spotifyRepeatAfterPlayState;
+  if (
+    spotifyPlayCalled &&
+    spotifyPlayApplied &&
+    spotifyPlayIsSingleTrack &&
+    currentBeforePlay !== spotifyPlayUri &&
+    currentAfterPlay === spotifyPlayUri &&
+    (!repeatAfterPlay || repeatAfterPlay === "track")
+  ) {
+    return result;
+  }
+
+  if (spotifyPlayCalled && spotifyPlayApplied) {
+    return applyDeterministicSpotifyRetryFallback({ entry, result, context, constraints });
+  }
+
+  const uris = getSpotifyTrackUris(result.data);
+  const requestedTrackUri = uris.find((uri) => uri.startsWith("spotify:track:")) ?? null;
+  if (!spotifyPlayCalled && result.success && requestedTrackUri && entry.resolved.toolContext) {
+    const fallbackResult = await entry.resolved.toolContext.executeToolCall({
+      id: `spotify-retry-fallback-${Date.now()}`,
+      type: "function",
+      function: {
+        name: "spotify_play",
+        arguments: JSON.stringify({
+          uri: requestedTrackUri,
+          reason: "Manual Spotify DJ retry fallback",
+        }),
+      },
+    });
+    try {
+      const parsed = JSON.parse(fallbackResult) as Record<string, unknown>;
+      if (parsed.applied === true) {
+        const fallbackCurrentBefore = (entry.resolved as any).__spotifyCurrentBeforePlayUri;
+        const fallbackPlayedUri = getSpotifyPlaybackTrackUri(parsed);
+        const fallbackRepeatState = getStringField(parsed, "repeatState") || getStringField(parsed, "repeat");
+        if (
+          fallbackCurrentBefore === requestedTrackUri ||
+          fallbackPlayedUri !== requestedTrackUri ||
+          (fallbackRepeatState && fallbackRepeatState !== "track")
+        ) {
+          return applyDeterministicSpotifyRetryFallback({ entry, result, context, constraints });
+        }
+        return {
+          ...result,
+          data:
+            result.data && typeof result.data === "object"
+              ? {
+                  ...(result.data as Record<string, unknown>),
+                  toolFallbackApplied: true,
+                  currentUri: fallbackPlayedUri,
+                  repeatState: fallbackRepeatState || null,
+                }
+              : {
+                  action: "play",
+                  trackUris: [requestedTrackUri],
+                  toolFallbackApplied: true,
+                  currentUri: fallbackPlayedUri,
+                  repeatState: fallbackRepeatState || null,
+                },
+        };
+      }
+      if (typeof parsed.error === "string") {
+        return { ...result, success: false, error: parsed.error };
+      }
+    } catch {
+      // Fall through to explicit failure below.
+    }
+  }
+
+  if (!spotifyPlayCalled) {
+    return applyDeterministicSpotifyRetryFallback({ entry, result, context, constraints });
+  }
+
+  return {
+    ...result,
+    success: false,
+    error:
+      typeof spotifyPlayError === "string" && spotifyPlayError.trim()
+        ? spotifyPlayError
+        : "Spotify DJ retry finished without applying spotify_play.",
+  };
+}
+
 async function executeRetryBatches(
   agentContext: AgentContext,
   resolvedAgents: ResolvedRetryAgent[],
@@ -554,8 +997,27 @@ async function executeRetryBatches(
   const results: AgentResult[] = [];
   const groupSettled = await Promise.allSettled(
     [...providerModelGroups.values()].map(async (group) => {
-      const configs = group.agents.map((agent) => agent.resolved);
-      return executeAgentBatch(configs, group.context, group.provider, group.model);
+      const toolAgents = group.agents.filter((agent) => agent.resolved.toolContext?.tools.length);
+      const batchAgents = group.agents.filter((agent) => !agent.resolved.toolContext?.tools.length);
+      const groupResults: AgentResult[] = [];
+
+      if (batchAgents.length > 0) {
+        const configs = batchAgents.map((agent) => agent.resolved);
+        groupResults.push(...(await executeAgentBatch(configs, group.context, group.provider, group.model)));
+      }
+
+      for (const entry of toolAgents) {
+        const result = await executeAgent(
+          entry.resolved,
+          group.context,
+          group.provider,
+          group.model,
+          entry.resolved.toolContext,
+        );
+        groupResults.push(await validateSpotifyRetryPlayback(entry, result, group.context));
+      }
+
+      return groupResults;
     }),
   );
 
@@ -1328,6 +1790,7 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         conns,
         agentsStore,
       });
+      await attachRetrySpotifyToolContexts({ agentsStore, resolvedAgents });
       const cyoaAgentWillRun = resolvedAgents.some((e) => e.resolved.type === "cyoa");
       const agentContext = await buildRetryAgentContext({
         cyoaAgentWillRun,

@@ -9,12 +9,7 @@ import {
   type VisualTheme,
 } from "../../stores/ui.store";
 import { cn } from "../../lib/utils";
-import {
-  useExtensions,
-  useCreateExtension,
-  useDeleteExtension,
-  useUpdateExtension,
-} from "../../hooks/use-extensions";
+import { useExtensions, useCreateExtension, useDeleteExtension, useUpdateExtension } from "../../hooks/use-extensions";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ADMIN_SECRET_STORAGE_KEY, api, getAdminSecretHeader } from "../../lib/api-client";
 import { forceRefreshSpa } from "@/lib/browser-runtime";
@@ -331,6 +326,8 @@ function GeneralSettings() {
   const setTrimIncompleteModelOutput = useUIStore((s) => s.setTrimIncompleteModelOutput);
   const speechToTextEnabled = useUIStore((s) => s.speechToTextEnabled);
   const setSpeechToTextEnabled = useUIStore((s) => s.setSpeechToTextEnabled);
+  const spotifyPlayerEnabled = useUIStore((s) => s.spotifyPlayerEnabled);
+  const setSpotifyPlayerEnabled = useUIStore((s) => s.setSpotifyPlayerEnabled);
   const intuitiveSwipeNavigation = useUIStore((s) => s.intuitiveSwipeNavigation);
   const setIntuitiveSwipeNavigation = useUIStore((s) => s.setIntuitiveSwipeNavigation);
   const intuitiveSwipeRerollLatest = useUIStore((s) => s.intuitiveSwipeRerollLatest);
@@ -433,6 +430,13 @@ function GeneralSettings() {
         checked={enableStreaming}
         onChange={setEnableStreaming}
         help="When on, AI responses appear word-by-word as they're generated. When off, the full response appears at once after completion."
+      />
+
+      <ToggleSetting
+        label="Spotify mini player"
+        checked={spotifyPlayerEnabled}
+        onChange={setSpotifyPlayerEnabled}
+        help="Shows a compact Spotify player in the top bar on desktop and as a draggable floating widget on mobile. Requires the Spotify DJ agent to be connected."
       />
 
       {/* Streaming Speed */}
@@ -824,6 +828,8 @@ function AppearanceSettings() {
   const setGameDialogueDisplayMode = useUIStore((s) => s.setGameDialogueDisplayMode);
   const gameAvatarScale = useUIStore((s) => s.gameAvatarScale);
   const setGameAvatarScale = useUIStore((s) => s.setGameAvatarScale);
+  const gameFullBodySpriteScale = useUIStore((s) => s.gameFullBodySpriteScale);
+  const setGameFullBodySpriteScale = useUIStore((s) => s.setGameFullBodySpriteScale);
   const textStrokeWidth = useUIStore((s) => s.textStrokeWidth);
   const setTextStrokeWidth = useUIStore((s) => s.setTextStrokeWidth);
   const textStrokeColor = useUIStore((s) => s.textStrokeColor);
@@ -1200,12 +1206,12 @@ function AppearanceSettings() {
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5">
           <Image size="0.75rem" className="text-[var(--muted-foreground)]" />
-          <span className="text-xs font-medium">Game Avatars</span>
-          <HelpTooltip text="Scales Game mode VN portraits and full-body sprites. The game view clamps oversized art so it still fits on small screens." />
+          <span className="text-xs font-medium">Game VN Art</span>
+          <HelpTooltip text="Scales Game mode dialogue portraits separately from the center full-body sprites. Oversized art is still clamped per viewport." />
         </div>
         <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-16 w-20 shrink-0 items-end justify-center overflow-hidden rounded-md bg-black/30 ring-1 ring-[var(--border)]/70">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="flex h-20 w-full shrink-0 items-end justify-center gap-3 overflow-hidden rounded-md bg-black/30 ring-1 ring-[var(--border)]/70 sm:w-28">
               <div
                 className="mb-1 rounded-lg border border-white/20 bg-gradient-to-b from-sky-300/80 via-cyan-200/65 to-slate-800/90 shadow-lg transition-all"
                 style={{
@@ -1213,24 +1219,50 @@ function AppearanceSettings() {
                   height: `${Math.min(3.9, 2.6 * gameAvatarScale)}rem`,
                 }}
               />
+              <div
+                className="mb-1 rounded-full border border-white/20 bg-gradient-to-b from-rose-200/85 via-fuchsia-200/70 to-slate-900/95 shadow-lg transition-all"
+                style={{
+                  width: `${Math.min(2.2, 0.9 * gameFullBodySpriteScale)}rem`,
+                  height: `${Math.min(4.8, 3.4 * gameFullBodySpriteScale)}rem`,
+                }}
+              />
             </div>
-            <label className="flex min-w-0 flex-1 flex-col gap-1">
-              <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Avatar and sprite scale</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0.75}
-                  max={1.75}
-                  step={0.05}
-                  value={gameAvatarScale}
-                  onChange={(e) => setGameAvatarScale(Number(e.target.value))}
-                  className="min-w-0 flex-1 accent-[var(--primary)]"
-                />
-                <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-                  {Math.round(gameAvatarScale * 100)}%
-                </span>
-              </div>
-            </label>
+            <div className="grid min-w-0 flex-1 gap-3">
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Dialogue portrait scale</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={1.75}
+                    step={0.05}
+                    value={gameAvatarScale}
+                    onChange={(e) => setGameAvatarScale(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                    {Math.round(gameAvatarScale * 100)}%
+                  </span>
+                </div>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-[0.6875rem] font-medium text-[var(--foreground)]">Full-body sprite scale</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={2.75}
+                    step={0.05}
+                    value={gameFullBodySpriteScale}
+                    onChange={(e) => setGameFullBodySpriteScale(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-[var(--primary)]"
+                  />
+                  <span className="w-12 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
+                    {Math.round(gameFullBodySpriteScale * 100)}%
+                  </span>
+                </div>
+              </label>
+            </div>
           </div>
         </div>
       </div>

@@ -13,6 +13,8 @@ import type {
   SceneAnalysis,
   SceneIllustrationRequest,
   SceneSegmentEffect,
+  SceneSpotifyTrackCandidate,
+  SceneSpotifyTrackSelection,
 } from "@marinara-engine/shared";
 import { normalizeLocationKind, normalizeMusicGenre, normalizeMusicIntensity } from "@marinara-engine/shared";
 import { logger } from "../../lib/logger.js";
@@ -127,6 +129,39 @@ function sanitizeIllustration(raw: unknown): SceneIllustrationRequest | null {
   };
 }
 
+function sanitizeSpotifyTrack(
+  raw: unknown,
+  candidates: SceneSpotifyTrackCandidate[] | undefined,
+): SceneSpotifyTrackSelection | null {
+  if (!candidates?.length) return null;
+  if (!raw || raw === "null") return null;
+
+  const uri =
+    typeof raw === "string"
+      ? sanitizeString(raw)
+      : raw && typeof raw === "object"
+        ? sanitizeString((raw as Record<string, unknown>).uri)
+        : null;
+  if (!uri) return null;
+
+  const candidate = candidates.find((track) => track.uri === uri);
+  if (!candidate) {
+    logger.debug(`[postprocess] spotifyTrack: "${uri}" → null (not in candidate list)`);
+    return null;
+  }
+
+  const reason =
+    raw && typeof raw === "object" ? sanitizeString((raw as Record<string, unknown>).reason)?.slice(0, 240) : null;
+
+  return {
+    uri: candidate.uri,
+    name: candidate.name,
+    artist: candidate.artist,
+    album: candidate.album ?? null,
+    reason: reason ?? null,
+  };
+}
+
 function normalizeDirection(direction: DirectionCommand): DirectionCommand | null {
   if (!VALID_DIRECTION_EFFECTS.has(direction.effect)) return null;
 
@@ -202,6 +237,7 @@ function bestMatch(prose: string, tags: string[]): string | null {
 export interface PostProcessContext {
   availableBackgrounds: string[];
   availableSfx: string[];
+  availableSpotifyTracks?: SceneSpotifyTrackCandidate[];
   validWidgetIds: Set<string>;
   characterNames: string[];
   canGenerateBackgrounds?: boolean;
@@ -334,6 +370,7 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   result.musicGenre = normalizeMusicGenre(rawRecord.musicGenre);
   result.musicIntensity = normalizeMusicIntensity(rawRecord.musicIntensity);
   result.locationKind = normalizeLocationKind(rawRecord.locationKind);
+  result.spotifyTrack = sanitizeSpotifyTrack(rawRecord.spotifyTrack, ctx.availableSpotifyTracks);
 
   // ── Background ──
   if (result.background && !ctx.availableBackgrounds.includes(result.background)) {

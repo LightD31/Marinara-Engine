@@ -214,21 +214,26 @@ test("custom compatible endpoints keep OpenAI reasoning model names on a standar
   assert.equal("enable_thinking" in body, false);
 });
 
-test("custom compatible endpoints do not force GPT-5.5 streaming extras", async () => {
+test("custom compatible GPT-5.5 endpoints route through Responses without Chat Completions streaming extras", async () => {
   const provider = createLLMProvider("custom", "https://example.com/v1", "test-key");
   const body = await captureChatRequestBody(
     "gpt-5.5",
-    { reasoningEffort: "xhigh", verbosity: "high" },
+    { reasoningEffort: "xhigh", verbosity: "high", temperature: 0.7, topP: 0.9 },
     "https://example.com/v1",
     provider,
   );
 
   assert.equal(body.stream, false);
-  assert.equal(body.max_tokens, 512);
+  assert.equal(body.max_output_tokens, 512);
+  assert.deepEqual(body.input, [{ role: "user", content: "Hello" }]);
+  assert.deepEqual(body.reasoning, { effort: "xhigh" });
+  assert.deepEqual(body.text, { verbosity: "high" });
   assert.equal("stream_options" in body, false);
-  assert.equal("max_completion_tokens" in body, false);
+  assert.equal("messages" in body, false);
+  assert.equal("max_tokens" in body, false);
   assert.equal("reasoning_effort" in body, false);
-  assert.equal("verbosity" in body, false);
+  assert.equal("temperature" in body, false);
+  assert.equal("top_p" in body, false);
 });
 
 test("custom compatible streams accept SSE data lines without a space", async () => {
@@ -321,31 +326,58 @@ test("OpenRouter Claude chatComplete receives unified reasoning config", async (
   assert.equal("enable_thinking" in body, false);
 });
 
-test("gpt-5.5 uses Chat Completions reasoning and verbosity payloads", async () => {
+test("gpt-5.5 routes chat through Responses reasoning and text payloads", async () => {
   const body = await captureChatRequestBody("gpt-5.5", {
     reasoningEffort: "xhigh",
     verbosity: "high",
   });
 
   assert.equal(body.model, "gpt-5.5");
-  assert.equal(body.stream, true);
-  assert.equal(body.reasoning_effort, "xhigh");
-  assert.equal(body.verbosity, "high");
-  assert.equal("reasoning" in body, false);
-  assert.equal("text" in body, false);
+  assert.equal(body.stream, false);
+  assert.equal(body.store, false);
+  assert.deepEqual(body.input, [{ role: "user", content: "Hello" }]);
+  assert.equal(body.max_output_tokens, 512);
+  assert.deepEqual(body.reasoning, { effort: "xhigh" });
+  assert.deepEqual(body.text, { verbosity: "high" });
+  assert.equal("messages" in body, false);
+  assert.equal("reasoning_effort" in body, false);
+  assert.equal("verbosity" in body, false);
+  assert.equal("max_completion_tokens" in body, false);
 });
 
-test("gpt-5.5 chatComplete forces streaming and keeps generation parameters", async () => {
+test("gpt-5.5 omits Responses sampling parameters even without reasoning effort", async () => {
+  const body = await captureChatRequestBody("gpt-5.5", {
+    reasoningEffort: undefined,
+    temperature: 0.7,
+    topP: 0.9,
+    frequencyPenalty: 0.2,
+    presencePenalty: 0.3,
+  });
+
+  assert.equal(body.model, "gpt-5.5");
+  assert.equal(body.max_output_tokens, 512);
+  assert.equal("reasoning" in body, false);
+  assert.equal("temperature" in body, false);
+  assert.equal("top_p" in body, false);
+  assert.equal("frequency_penalty" in body, false);
+  assert.equal("presence_penalty" in body, false);
+});
+
+test("gpt-5.5 routes chatComplete through Responses without Chat Completions streaming extras", async () => {
   const body = await captureChatCompleteRequestBody("gpt-5.5", {
     reasoningEffort: "xhigh",
     verbosity: "high",
   });
 
   assert.equal(body.model, "gpt-5.5");
-  assert.equal(body.stream, true);
-  assert.deepEqual(body.stream_options, { include_usage: true });
-  assert.equal(body.reasoning_effort, "xhigh");
-  assert.equal(body.verbosity, "high");
+  assert.equal(body.stream, false);
+  assert.equal(body.max_output_tokens, 512);
+  assert.deepEqual(body.reasoning, { effort: "xhigh" });
+  assert.deepEqual(body.text, { verbosity: "high" });
+  assert.equal("stream_options" in body, false);
+  assert.equal("messages" in body, false);
+  assert.equal("reasoning_effort" in body, false);
+  assert.equal("verbosity" in body, false);
 });
 
 test("assistant reasoning_content metadata is replayed on Chat Completions messages", async () => {
@@ -554,4 +586,18 @@ test("responses requests include fallback input for system-only prompts", () => 
 
   assert.equal(body.instructions, "You are helpful.");
   assert.deepEqual(body.input, [{ role: "user", content: "Continue." }]);
+});
+
+test("responses requests translate responseFormat to text.format", () => {
+  const provider = new OpenAIProvider("https://example.com/v1", "test-key") as any;
+  const body = provider.buildResponsesBody([{ role: "user", content: "Return JSON." }], {
+    model: "gpt-5.5",
+    stream: false,
+    maxTokens: 128,
+    verbosity: "medium",
+    responseFormat: { type: "json_object" },
+  } satisfies ChatOptions) as Record<string, unknown>;
+
+  assert.deepEqual(body.text, { verbosity: "medium", format: { type: "json_object" } });
+  assert.equal("response_format" in body, false);
 });

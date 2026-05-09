@@ -1,8 +1,10 @@
-import { readdirSync, existsSync } from "fs";
+import { readdirSync, existsSync, readFileSync } from "fs";
 import { join, extname } from "path";
 import { DATA_DIR } from "../../utils/data-dir.js";
 
 const SPRITE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
+const SPRITE_REFERENCE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"]);
+const FULL_BODY_REFERENCE_PRIORITY = ["full_neutral", "full_idle", "full_default"];
 const AUTOMATIC_FULL_BODY_POSES = new Set([
   "idle",
   "walk",
@@ -29,6 +31,12 @@ export interface CharacterSpriteInfo {
   fullBody: string[];
   /** Engine-assigned standard full-body poses; not exposed to the model. */
   automaticFullBody: string[];
+}
+
+export interface FullBodySpriteReference {
+  expression: string;
+  filename: string;
+  base64: string;
 }
 
 /**
@@ -65,6 +73,50 @@ export function listCharacterSprites(
 
     if (expressions.length === 0 && fullBody.length === 0 && automaticFullBody.length === 0) return null;
     return { expressions, fullBody, automaticFullBody };
+  } catch {
+    return null;
+  }
+}
+
+function isSafeSpriteOwnerId(characterId: string): boolean {
+  return !!characterId && !characterId.includes("..") && !characterId.includes("/") && !characterId.includes("\\");
+}
+
+/**
+ * Read the best full-body sprite to use as an image-generation character reference.
+ * Prefers full_neutral, then full_idle/default, then any available full-body sprite.
+ */
+export function readPreferredFullBodySpriteBase64(
+  characterId: string | null | undefined,
+): FullBodySpriteReference | null {
+  if (!characterId || !isSafeSpriteOwnerId(characterId)) return null;
+
+  const dir = join(DATA_DIR, "sprites", characterId);
+  if (!existsSync(dir)) return null;
+
+  try {
+    const fullBodyFiles = readdirSync(dir)
+      .filter((filename) => SPRITE_REFERENCE_EXTS.has(extname(filename).toLowerCase()))
+      .map((filename) => ({
+        filename,
+        expression: filename.slice(0, -extname(filename).length),
+      }))
+      .filter((entry) => entry.expression.toLowerCase().startsWith("full_"));
+
+    if (fullBodyFiles.length === 0) return null;
+
+    const preferred =
+      FULL_BODY_REFERENCE_PRIORITY.map((expression) =>
+        fullBodyFiles.find((entry) => entry.expression.toLowerCase() === expression),
+      ).find((entry): entry is { filename: string; expression: string } => Boolean(entry)) ??
+      fullBodyFiles.sort((a, b) => a.expression.localeCompare(b.expression))[0];
+
+    if (!preferred) return null;
+
+    return {
+      ...preferred,
+      base64: readFileSync(join(dir, preferred.filename)).toString("base64"),
+    };
   } catch {
     return null;
   }

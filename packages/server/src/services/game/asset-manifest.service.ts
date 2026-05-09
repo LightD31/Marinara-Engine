@@ -7,7 +7,7 @@
 // ──────────────────────────────────────────────
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "fs";
 import { join, extname, relative, basename } from "path";
-import { MUSIC_GENRES, MUSIC_INTENSITIES, type MusicGenre, type MusicIntensity } from "@marinara-engine/shared";
+import { type MusicGenre, type MusicIntensity } from "@marinara-engine/shared";
 import { DATA_DIR } from "../../utils/data-dir.js";
 
 export const GAME_ASSETS_DIR = join(DATA_DIR, "game-assets");
@@ -131,15 +131,10 @@ function migrateLegacyFlatMusicAssets(): void {
 
 /** Ensure the base game-assets directory structure exists. */
 export function ensureAssetDirs(): void {
-  const structuredMusicDirs = MUSIC_STATES.flatMap((state) =>
-    MUSIC_GENRES.flatMap((genre) =>
-      MUSIC_INTENSITIES.map((intensity) => join(GAME_ASSETS_DIR, "music", state, genre, intensity)),
-    ),
-  );
-
   const dirs = [
     GAME_ASSETS_DIR,
-    ...structuredMusicDirs,
+    join(GAME_ASSETS_DIR, "music"),
+    ...MUSIC_STATES.map((state) => join(GAME_ASSETS_DIR, "music", state)),
     join(GAME_ASSETS_DIR, "sfx", "ui"),
     join(GAME_ASSETS_DIR, "sfx", "combat"),
     join(GAME_ASSETS_DIR, "sfx", "exploration"),

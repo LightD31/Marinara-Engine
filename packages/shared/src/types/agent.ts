@@ -502,6 +502,7 @@ export const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
   "chat-summary": [],
   // Also used server-side to identify Spotify tools that require token refresh.
   spotify: [
+    "spotify_get_current_playback",
     "spotify_get_playlists",
     "spotify_get_playlist_tracks",
     "spotify_search",
@@ -767,6 +768,15 @@ export const BUILT_IN_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "spotify_get_current_playback",
+    description:
+      "Get the user's current Spotify playback state, track, active device, and volume. Use this before changing music so you do not restart or replace a fitting track.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "spotify_get_playlists",
     description:
       "Get the user's Spotify playlists and saved library. Returns playlist names and URIs. Use this FIRST to see what the user already has before searching.",
@@ -780,22 +790,35 @@ export const BUILT_IN_TOOLS: ToolDefinition[] = [
   {
     name: "spotify_get_playlist_tracks",
     description:
-      "Get tracks from a specific playlist or the user's Liked Songs. For Liked Songs (playlistId='liked'), returns the FULL library automatically (up to 500 tracks). For regular playlists, returns a paginated batch.",
+      "Get track candidates from a specific playlist or the user's Liked Songs. By default, the server indexes/caches the full source and returns only a compact scored shortlist for the model. Supplying offset switches to raw page mode.",
     parameters: {
       type: "object",
       properties: {
         playlistId: {
           type: "string",
-          description: "Playlist ID (from spotify_get_playlists), or 'liked' for the user's full Liked Songs library",
+          description: "Playlist ID (from spotify_get_playlists), or 'liked' for the user's Liked Songs library",
+        },
+        query: {
+          type: "string",
+          description:
+            "Scene/mood search terms used to score candidates from the full cached playlist, e.g. 'tense battle orchestral' or 'quiet melancholy'.",
+        },
+        mood: {
+          type: "string",
+          description: "Optional short mood label to combine with query when choosing candidates.",
+        },
+        candidateLimit: {
+          type: "number",
+          description: "How many candidate tracks to return in candidate mode (default: 60, max: 80).",
         },
         limit: {
           type: "number",
           description:
-            "Number of tracks to return for regular playlists (default: 30, max: 50). Ignored for 'liked' which auto-fetches all.",
+            "Candidate count in default mode, or page size when offset is provided (page max: 50).",
         },
         offset: {
           type: "number",
-          description: "Offset for pagination for regular playlists (default: 0). Ignored for 'liked'.",
+          description: "Optional raw-page offset. Only use for manual browsing; default mode is cached candidate selection.",
         },
       },
       required: ["playlistId"],
@@ -821,7 +844,7 @@ export const BUILT_IN_TOOLS: ToolDefinition[] = [
   {
     name: "spotify_play",
     description:
-      "Play one or more tracks, or a playlist, on the user's active Spotify device. Pass multiple URIs to queue a sequence of tracks.",
+      "Play one or more tracks, or a playlist, on the user's active Spotify device. In game mode, pass one best track URI so it can loop until a new scene pick.",
     parameters: {
       type: "object",
       properties: {

@@ -159,6 +159,8 @@ export interface ChatMetadata {
   // ── Conversation Mode Fields ──
   /** Whether conversation character schedules are enabled for this chat. */
   conversationSchedulesEnabled?: boolean;
+  /** Allow conversation characters to use hidden Spotify song commands. */
+  conversationSpotifyCommandsEnabled?: boolean;
   /** Chat-scoped generated schedules for conversation characters. */
   characterSchedules?: Record<string, unknown>;
   /** Week start timestamp for the current generated conversation schedules. */
@@ -211,6 +213,18 @@ export interface ChatMetadata {
   gameLastIllustrationSessionNumber?: number | null;
   /** Background tag for the last rare generated scene illustration. */
   gameLastIllustrationTag?: string;
+  /** Extra user instructions for game scene illustration prompts. */
+  gameImagePromptInstructions?: string | null;
+  /** When true, Game Mode uses Spotify DJ for music instead of local music assets. */
+  gameUseSpotifyMusic?: boolean;
+  /** Music source constraint for Spotify DJ in Game Mode. */
+  gameSpotifySourceType?: "liked" | "playlist" | "artist" | "any";
+  /** Spotify playlist ID used when gameSpotifySourceType is "playlist". */
+  gameSpotifyPlaylistId?: string | null;
+  /** Human-readable playlist name cached for prompts/display. */
+  gameSpotifyPlaylistName?: string | null;
+  /** Spotify artist name used when gameSpotifySourceType is "artist". */
+  gameSpotifyArtist?: string | null;
   /** Run Game Lorebook Keeper after a session is concluded. */
   gameLorebookKeeperEnabled?: boolean;
   /** Chat-scoped lorebook maintained by Game Lorebook Keeper. */

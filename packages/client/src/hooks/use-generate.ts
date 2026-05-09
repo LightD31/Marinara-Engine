@@ -96,10 +96,7 @@ function resolveCachedCharacterIdentity(
     fallbackName ||
     "Character";
   const avatarCrop =
-    parsed &&
-    typeof parsed.extensions === "object" &&
-    parsed.extensions &&
-    "avatarCrop" in parsed.extensions
+    parsed && typeof parsed.extensions === "object" && parsed.extensions && "avatarCrop" in parsed.extensions
       ? ((parsed.extensions as { avatarCrop?: { zoom: number; offsetX: number; offsetY: number } | null }).avatarCrop ??
         null)
       : null;
@@ -349,10 +346,10 @@ function parseChatMetadata(metadata: Chat["metadata"] | string | null | undefine
 }
 
 function getCachedChatMode(qc: QueryClient, chatId: string): Chat["mode"] | undefined {
-  const detail = qc.getQueryData<Chat>(chatKeys.detail(chatId));
-  if (detail?.mode) return detail.mode;
   const activeChat = useChatStore.getState().activeChat;
   if (activeChat?.id === chatId) return activeChat.mode;
+  const detail = qc.getQueryData<Chat>(chatKeys.detail(chatId));
+  if (detail?.mode) return detail.mode;
   const list = qc.getQueryData<Chat[]>(chatKeys.list());
   return list?.find((chat) => chat.id === chatId)?.mode;
 }
@@ -487,6 +484,7 @@ export function useGenerate() {
       // Used to guard global UI state updates (typing indicator, delayed info, stream
       // buffer, etc.) so that a background chat's events don't corrupt the active view.
       const isActiveChat = () => useChatStore.getState().activeChatId === params.chatId;
+      const isGameGeneration = getCachedChatMode(qc, params.chatId) === "game";
 
       // Only touch global streaming UI state if the user is viewing this chat.
       // Background generations (e.g. autonomous messaging) run silently,
@@ -618,6 +616,8 @@ export function useGenerate() {
       // chars-per-tick to prevent the typewriter lagging far behind real completion.
       const CATCHUP_THRESHOLD = 300;
       const CATCHUP_MULTIPLIER = 4;
+      const TYPEWRITER_FRAME_MS = 28;
+      let lastTypewriterPaintAt = 0;
 
       console.log(
         "[Typewriter] streaming=%s, speed=%d, charsPerTick=%d",
@@ -637,7 +637,7 @@ export function useGenerate() {
       const startTypewriter = () => {
         if (typingActive) return;
         typingActive = true;
-        const tick = () => {
+        const tick = (now = performance.now()) => {
           if (pendingText.length === 0) {
             typingActive = false;
             if (typewriterDone) {
@@ -646,6 +646,11 @@ export function useGenerate() {
             }
             return;
           }
+          if (now - lastTypewriterPaintAt < TYPEWRITER_FRAME_MS) {
+            rafId = requestAnimationFrame(tick);
+            return;
+          }
+          lastTypewriterPaintAt = now;
           // Read speed per-tick so the slider has immediate effect
           const charsPerTick = getCharsPerTick();
           // Catch-up: if the pending queue is very long, increase speed to avoid
@@ -827,6 +832,9 @@ export function useGenerate() {
 
               if (result.success) {
                 qc.invalidateQueries({ queryKey: agentKeys.customRuns(params.chatId) });
+                if (result.agentType === "spotify") {
+                  qc.invalidateQueries({ queryKey: ["spotify", "player"] });
+                }
               }
 
               // Only update agent/game/UI stores for the active chat so a
@@ -1010,7 +1018,12 @@ export function useGenerate() {
                   );
                   useChatStore
                     .getState()
-                    .addNotification(params.chatId, identity.name ?? "Character", identity.avatarUrl, identity.avatarCrop);
+                    .addNotification(
+                      params.chatId,
+                      identity.name ?? "Character",
+                      identity.avatarUrl,
+                      identity.avatarCrop,
+                    );
                   const chatList = qc.getQueryData<Chat[]>(chatKeys.list());
                   const thisChat = chatList?.find((c) => c.id === params.chatId);
                   const isRpMode = thisChat?.mode === "roleplay" || thisChat?.mode === "visual_novel";
@@ -1176,6 +1189,25 @@ export function useGenerate() {
               const errData = event.data as { characterId: string; error: string };
               console.warn("[selfie] Generation failed:", errData.error);
               toast.error(`Selfie generation failed: ${errData.error}`);
+              break;
+            }
+
+            case "spotify_command": {
+              const spotifyData = event.data as {
+                track?: { name?: string; artist?: string };
+                title?: string;
+                artist?: string;
+              };
+              const trackName = spotifyData.track?.name ?? spotifyData.title ?? "Spotify track";
+              const artistName = spotifyData.track?.artist ?? spotifyData.artist ?? "Spotify";
+              toast(`Playing ${trackName} - ${artistName}`, { icon: "🎵" });
+              qc.invalidateQueries({ queryKey: ["spotify", "player"] });
+              break;
+            }
+
+            case "spotify_command_error": {
+              const spotifyData = event.data as { title?: string; artist?: string; error?: string };
+              toast.error(spotifyData.error ?? "Spotify song command failed.");
               break;
             }
 
@@ -1394,18 +1426,18 @@ export function useGenerate() {
         // Cancel any pending animation frame to prevent leaks
         cancelAnimationFrame(rafId);
 
-        // Refresh game state from DB so the HUD shows the correct tracker data
-        // for the active swipe. SSE game_state_patch events update the store
-        // during generation, but React scheduling / streaming can cause them
-        // to not fully propagate — this authoritative DB fetch ensures the
-        // final state is always correct (especially after swipe regeneration).
-        try {
-          const gs = await api.get<import("@marinara-engine/shared").GameState | null>(
-            `/chats/${params.chatId}/game-state`,
-          );
-          if (gs) useGameStateStore.getState().setGameState(gs);
-        } catch {
-          /* best-effort — SSE patches already populated the store */
+        if (isGameGeneration) {
+          // Refresh game state from DB so the HUD shows the correct tracker data
+          // for the active swipe. Conversation and roleplay chats skip this
+          // game-only request; on large chats it can dominate the cleanup tail.
+          try {
+            const gs = await api.get<import("@marinara-engine/shared").GameState | null>(
+              `/chats/${params.chatId}/game-state`,
+            );
+            if (gs) useGameStateStore.getState().setGameState(gs);
+          } catch {
+            /* best-effort — SSE patches already populated the store */
+          }
         }
         // Re-sort sidebar so this chat floats to the top
         qc.invalidateQueries({ queryKey: chatKeys.list() });
@@ -1453,21 +1485,36 @@ export function useGenerate() {
         // + user send). The latest generation replaces the AbortController,
         // so the superseded one knows it no longer owns the state.
         const stillOwner = useChatStore.getState().abortControllers.get(params.chatId) === abortController;
+        const persistedForRefresh = [...persistedMessages.values()];
+        const primeMessagesFromSaved = () => {
+          if (persistedForRefresh.length > 0) {
+            upsertPersistedMessages(qc, params.chatId, persistedForRefresh);
+          }
+        };
+        const refreshMessagesInBackground = () => {
+          void refreshMessagesAuthoritatively(qc, params.chatId, persistedForRefresh);
+        };
         if (stillOwner) {
           // Only clear global streaming/UI state if this chat is still the one
           // being displayed, to avoid corrupting another chat's active generation.
           if (useChatStore.getState().streamingChatId === params.chatId) {
-            // Authoritative refresh BEFORE clearing streaming state. This
-            // fetches the latest messages from DB (including illustrations and
-            // other post-processing attachments). React 19 batches the React
-            // Query cache update and the Zustand streaming state update into
-            // one commit since they happen in the same microtask after the
-            // await resolves — preventing both duplicate-flash and empty-flash.
-            await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
+            if (isGameGeneration || (receivedContent && persistedForRefresh.length === 0)) {
+              // Game mode still needs the authoritative refresh before release
+              // because the scene/HUD pipeline depends on the final snapshot.
+              await refreshMessagesAuthoritatively(qc, params.chatId, persistedForRefresh);
+            } else {
+              primeMessagesFromSaved();
+              refreshMessagesInBackground();
+            }
             setStreaming(false);
             clearStreamBuffer(params.chatId);
           } else {
-            await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
+            if (isGameGeneration || (receivedContent && persistedForRefresh.length === 0)) {
+              await refreshMessagesAuthoritatively(qc, params.chatId, persistedForRefresh);
+            } else {
+              primeMessagesFromSaved();
+              refreshMessagesInBackground();
+            }
             clearStreamBuffer(params.chatId);
           }
           if (isActiveChat()) {
@@ -1482,7 +1529,12 @@ export function useGenerate() {
           useChatStore.getState().setAbortController(params.chatId, null);
         } else {
           // Not the owner but still need messages up to date
-          await refreshMessagesAuthoritatively(qc, params.chatId, persistedMessages.values());
+          if (isGameGeneration || (receivedContent && persistedForRefresh.length === 0)) {
+            await refreshMessagesAuthoritatively(qc, params.chatId, persistedForRefresh);
+          } else {
+            primeMessagesFromSaved();
+            refreshMessagesInBackground();
+          }
         }
 
         // Always notify game surface that generation completed for this chat.
@@ -1578,7 +1630,6 @@ export function useGenerate() {
     ) => {
       const isActiveChat = () => useChatStore.getState().activeChatId === chatId;
       const abortController = new AbortController();
-      useChatStore.getState().setAbortController(chatId, abortController);
       setProcessing(true);
       clearFailedAgentTypes();
       clearThoughtBubbles();
@@ -1629,6 +1680,9 @@ export function useGenerate() {
 
               if (result.success) {
                 qc.invalidateQueries({ queryKey: agentKeys.customRuns(chatId) });
+                if (result.agentType === "spotify") {
+                  qc.invalidateQueries({ queryKey: ["spotify", "player"] });
+                }
               }
 
               addResult(result.agentType, {
@@ -1725,6 +1779,7 @@ export function useGenerate() {
                 }
               }
               if (!result.success && result.error) {
+                hasError = true;
                 showError(`${result.agentName ?? result.agentType} failed: ${result.error}`);
               }
               break;
@@ -1806,14 +1861,15 @@ export function useGenerate() {
         showError(msg);
       } finally {
         setProcessing(false);
-        useChatStore.getState().setAbortController(chatId, null);
-        // Refresh game state from DB for the same reason as normal generation
-        api
-          .get<import("@marinara-engine/shared").GameState | null>(`/chats/${chatId}/game-state`)
-          .then((gs) => {
-            if (gs) useGameStateStore.getState().setGameState(gs);
-          })
-          .catch(() => {});
+        if (getCachedChatMode(qc, chatId) === "game") {
+          // Refresh game state from DB for the same reason as normal generation.
+          api
+            .get<import("@marinara-engine/shared").GameState | null>(`/chats/${chatId}/game-state`)
+            .then((gs) => {
+              if (gs) useGameStateStore.getState().setGameState(gs);
+            })
+            .catch(() => {});
+        }
       }
     },
     [
@@ -1915,8 +1971,8 @@ function formatAgentBubble(agentType: string, agentName: string, data: unknown):
 
     case "spotify": {
       const action = d.action as string;
-      if (action === "none") return null;
       const mood = (d.mood as string) ?? "";
+      if (action === "none") return mood ? `🎵 Keeping current track — ${mood}` : "🎵 Keeping current track";
       if (action === "play") {
         // Support both array and singular formats
         const trackNames: string[] = Array.isArray(d.trackNames)

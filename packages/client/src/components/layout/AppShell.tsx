@@ -3,6 +3,7 @@
 // ──────────────────────────────────────────────
 import { ChatSidebar } from "./ChatSidebar";
 import { TopBar } from "./TopBar";
+import { SpotifyMobileWidget } from "../spotify/SpotifyMiniPlayer";
 import { ChatNotificationBubbles } from "../chat/ChatNotificationBubbles";
 import {
   RIGHT_PANEL_WIDTH_MAX,
@@ -494,6 +495,7 @@ export function AppShell() {
           <OnboardingTutorial />
         </Suspense>
       )}
+      <SpotifyMobileWidget />
     </div>
   );
 }
