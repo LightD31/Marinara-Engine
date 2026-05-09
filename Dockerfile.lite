@@ -33,8 +33,8 @@ COPY packages/client/package.json packages/client/
 # Install all dependencies needed for building, skipping optional local-model
 # packages so onnxruntime-node cannot run its GPU postinstall in Lite builds.
 RUN --mount=type=cache,target=/app/.pnpm-store \
-    pnpm install --frozen-lockfile --no-optional --ignore-scripts && \
-    pnpm rebuild esbuild
+    pnpm install --frozen-lockfile --ignore-scripts && \
+    pnpm rebuild esbuild rollup
 
 # Copy source code
 COPY tsconfig.base.json ./
