@@ -1137,6 +1137,15 @@ export async function chatsRoutes(app: FastifyInstance) {
                     LorebookEntryTimingState
                   >)
                 : undefined,
+            generationTriggers:
+              ((chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers) &&
+              Array.isArray(chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers))
+                ? ((chatMeta.generationTriggers ?? chatMeta.lorebookGenerationTriggers) as string[])
+                : undefined,
+            lorebookTokenBudget:
+              typeof (chatMeta.lorebookTokenBudget ?? chatMeta.generationLorebookTokenBudget) === "number"
+                ? ((chatMeta.lorebookTokenBudget ?? chatMeta.generationLorebookTokenBudget) as number)
+                : undefined,
             previewOnly: true,
             groupScenarioOverrideText:
               typeof chatMeta.groupScenarioText === "string" && (chatMeta.groupScenarioText as string).trim()
