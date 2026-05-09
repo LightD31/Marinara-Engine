@@ -27,6 +27,7 @@ const AUTOMATIC_FULL_BODY_POSES = new Set([
 export interface CharacterSpriteInfo {
   name: string;
   expressions: string[];
+  expressionChoices: string[];
   /** Custom full-body aliases the model may intentionally choose. */
   fullBody: string[];
   /** Engine-assigned standard full-body poses; not exposed to the model. */
@@ -130,7 +131,7 @@ export function listPartySprites(characters: Array<{ id: string; name: string }>
   for (const char of characters) {
     const sprites = listCharacterSprites(char.id);
     if (sprites) {
-      result.push({ name: char.name, ...sprites });
+      result.push({ name: char.name, expressionChoices: buildSpriteExpressionChoices(sprites.expressions), ...sprites });
     }
   }
   return result;
