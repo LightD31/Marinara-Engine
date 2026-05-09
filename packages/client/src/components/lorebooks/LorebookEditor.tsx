@@ -110,6 +110,7 @@ type LinkedResourceItem = {
   id: string;
   name: string;
   description?: string | null;
+  deleted?: boolean;
 };
 
 function LinkedResourcePicker({
@@ -145,9 +146,15 @@ function LinkedResourcePicker({
   onAdd: (id: string) => void;
   onRemove: (id: string) => void;
 }) {
-  const selectedItems = selectedIds
-    .map((id) => items.find((item) => item.id === id))
-    .filter((item): item is LinkedResourceItem => Boolean(item));
+  const selectedItems = selectedIds.map(
+    (id) =>
+      items.find((item) => item.id === id) ?? {
+        id,
+        name: "(deleted)",
+        description: id,
+        deleted: true,
+      },
+  );
   const availableItems = items.filter(
     (item) =>
       !selectedIds.includes(item.id) &&
