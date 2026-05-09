@@ -482,8 +482,9 @@ test("security headers and route rate limits are applied", async () =>
       assert.equal(headers.headers["x-content-type-options"], "nosniff");
       const csp = String(headers.headers["content-security-policy"]);
       assert.match(csp, /default-src 'self'/);
-      assert.match(csp, /script-src 'self' blob:/);
-      assert.match(csp, /media-src 'self' blob:/);
+      assert.match(csp, /script-src 'self' blob: https:\/\/sdk\.scdn\.co/);
+      assert.match(csp, /media-src 'self' blob: https:/);
+      assert.match(csp, /frame-src 'self' https:\/\/sdk\.scdn\.co https:\/\/accounts\.spotify\.com/);
       assert.doesNotMatch(csp, /unsafe-eval/);
 
       let lastStatus = 0;

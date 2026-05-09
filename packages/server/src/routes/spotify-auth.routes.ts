@@ -524,6 +524,7 @@ export async function spotifyAuthRoutes(app: FastifyInstance) {
 
     const requiredScopes = [
       "user-read-private",
+      "playlist-modify-public",
       "playlist-modify-private",
       "user-library-read",
       "user-modify-playback-state",

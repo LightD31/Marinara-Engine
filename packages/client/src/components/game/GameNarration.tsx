@@ -623,12 +623,53 @@ function findNpcVoiceHint(speaker: string | null | undefined, gameNpcs: GameNpc[
   return { name: npc.name, description: npc.description, gender: npc.gender, pronouns: npc.pronouns, notes: npc.notes };
 }
 
+type GameSegmentVoiceOptions = {
+  playerSpeakerNames?: ReadonlySet<string>;
+};
+
+function normalizeGameVoiceSpeakerName(value: string | null | undefined): string {
+  return value?.trim().toLowerCase().replace(/\s+/g, " ") ?? "";
+}
+
+function getGameVoicePlayerSpeakerNames(personaName: string | undefined): Set<string> {
+  const names = new Set(["you", "player", "player character", "playername", "player name", "protagonist", "pc"]);
+  const normalizedPersonaName = normalizeGameVoiceSpeakerName(personaName);
+  if (normalizedPersonaName) names.add(normalizedPersonaName);
+  return names;
+}
+
+function isGameVoicePlayerSpeaker(
+  speaker: string | null | undefined,
+  playerSpeakerNames: ReadonlySet<string> | undefined,
+): boolean {
+  const normalizedSpeaker = normalizeGameVoiceSpeakerName(speaker);
+  return Boolean(normalizedSpeaker && playerSpeakerNames?.has(normalizedSpeaker));
+}
+
+function isGameVoicePlayerTaggedNarration(
+  content: string,
+  playerSpeakerNames: ReadonlySet<string> | undefined,
+): boolean {
+  if (!playerSpeakerNames?.size) return false;
+  const speakerMatch = content.match(/^\s*\[([^\]]+)\](?:\s*\[[^\]]+\])?/);
+  if (!speakerMatch) return false;
+  return isGameVoicePlayerSpeaker(speakerMatch[1], playerSpeakerNames);
+}
+
+function shouldSkipGameVoiceSegment(segment: NarrationSegment, options: GameSegmentVoiceOptions): boolean {
+  if (segment.sourceRole === "user" || segment.sourceRole === "system") return true;
+  if (segment.partyType === "thought") return true;
+  if (isGameVoicePlayerSpeaker(segment.speaker, options.playerSpeakerNames)) return true;
+  return segment.type === "narration" && isGameVoicePlayerTaggedNarration(segment.content, options.playerSpeakerNames);
+}
+
 function getGameSegmentVoiceRequest(
   segment: NarrationSegment,
   config: TTSConfig,
   gameNpcs: GameNpc[] = [],
+  options: GameSegmentVoiceOptions = {},
 ): GameSegmentVoiceRequest | null {
-  if (segment.sourceRole === "user" || segment.sourceRole === "system") return null;
+  if (shouldSkipGameVoiceSegment(segment, options)) return null;
   if (segment.type !== "dialogue" && segment.type !== "narration") return null;
 
   if (segment.type === "dialogue") {
@@ -964,6 +1005,8 @@ export function GameNarration({
     if (personaInfo?.name?.trim()) names.add(personaInfo.name.trim().toLowerCase());
     return names;
   }, [activeCharacterEntries, personaInfo]);
+
+  const playerVoiceSpeakerNames = useMemo(() => getGameVoicePlayerSpeakerNames(personaInfo?.name), [personaInfo?.name]);
 
   const canUploadNpcPortrait = useCallback(
     (speaker?: string | null) => {
@@ -1583,12 +1626,14 @@ export function GameNarration({
       if (!ttsConfig) return [];
 
       const requests: GameSegmentVoiceRequest[] = [];
-      const baseRequest = getGameSegmentVoiceRequest(segment, ttsConfig, gameNpcs);
+      const baseRequest = getGameSegmentVoiceRequest(segment, ttsConfig, gameNpcs, {
+        playerSpeakerNames: playerVoiceSpeakerNames,
+      });
       if (baseRequest) requests.push(baseRequest);
 
       return requests;
     },
-    [gameNpcs, ttsConfig],
+    [gameNpcs, playerVoiceSpeakerNames, ttsConfig],
   );
 
   const getVoiceRequestForSideLine = useCallback(
@@ -1606,10 +1651,12 @@ export function GameNarration({
         sourceSegmentIndex: line.voiceSourceSegmentIndex ?? segment.sourceSegmentIndex,
         sourceRole: line.voiceSourceRole ?? "assistant",
       };
-      const request = getGameSegmentVoiceRequest(sideSegment, ttsConfig, gameNpcs);
+      const request = getGameSegmentVoiceRequest(sideSegment, ttsConfig, gameNpcs, {
+        playerSpeakerNames: playerVoiceSpeakerNames,
+      });
       return request ? [request] : [];
     },
-    [gameNpcs, ttsConfig],
+    [gameNpcs, playerVoiceSpeakerNames, ttsConfig],
   );
 
   const getVoiceKeyForSegment = useCallback(
