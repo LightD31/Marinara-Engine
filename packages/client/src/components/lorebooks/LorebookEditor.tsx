@@ -470,8 +470,20 @@ export function LorebookEditor() {
     setFormTokenBudget(lorebook.tokenBudget);
     setFormRecursive(lorebook.recursiveScanning);
     setFormMaxRecursionDepth(lorebook.maxRecursionDepth ?? 3);
-    setFormCharacterIds(Array.from(new Set(lorebook.characterIds ?? (lorebook.characterId ? [lorebook.characterId] : []))));
-    setFormPersonaIds(Array.from(new Set(lorebook.personaIds ?? (lorebook.personaId ? [lorebook.personaId] : []))));
+    const characterSource =
+      Array.isArray(lorebook.characterIds) && lorebook.characterIds.length > 0
+        ? lorebook.characterIds
+        : lorebook.characterId
+          ? [lorebook.characterId]
+          : [];
+    const personaSource =
+      Array.isArray(lorebook.personaIds) && lorebook.personaIds.length > 0
+        ? lorebook.personaIds
+        : lorebook.personaId
+          ? [lorebook.personaId]
+          : [];
+    setFormCharacterIds(Array.from(new Set(characterSource)));
+    setFormPersonaIds(Array.from(new Set(personaSource)));
     setFormTags(lorebook.tags ?? []);
     setLorebookDirty(false);
     loadedLorebookIdRef.current = lorebook.id;

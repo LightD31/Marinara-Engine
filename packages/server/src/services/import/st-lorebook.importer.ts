@@ -177,6 +177,10 @@ function nonEmptyString(...values: unknown[]): string | null {
   return null;
 }
 
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
 function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -372,12 +376,14 @@ export async function importSTLorebook(
     const resolvedRole = resolveRole(entry.role);
     const resolvedCaseSensitive = entry.caseSensitive ?? entry.case_sensitive ?? false;
     const resolvedMatchWholeWords = entry.matchWholeWords ?? entry.match_whole_words ?? false;
+    const sanitizedContent = normalizeString(entry.content);
+    const sanitizedDescription = normalizeString(entry.description);
 
     const input: CreateLorebookEntryInput = {
       lorebookId: lorebookId,
       name: resolvedName,
-      content: entry.content ?? "",
-      description: entry.description ?? "",
+      content: sanitizedContent,
+      description: sanitizedDescription,
       keys: resolvedKeys,
       secondaryKeys: resolvedSecondaryKeys,
       enabled: resolvedEnabled,
