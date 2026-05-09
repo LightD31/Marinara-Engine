@@ -115,7 +115,6 @@ import { GameReadableDisplay } from "./GameReadableDisplay";
 import { ChatGalleryDrawer } from "../chat/ChatGalleryDrawer";
 import type { ReadableTag } from "../../lib/game-tag-parser";
 import type { DirectionCommand, GameNpc } from "@marinara-engine/shared";
-import { playNotificationPing } from "../../lib/notification-sound";
 
 type JournalReadable = ReadableTag & {
   sourceMessageId?: string | null;
@@ -177,7 +176,6 @@ const GAME_ASSET_GENERATION_TIMEOUT_MS = 240_000;
 const GAME_ASSET_PREVIEW_TIMEOUT_MS = 180_000;
 const GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS = 180_000;
 const IMAGE_PROMPT_REVIEW_TIMED_OUT = Symbol("IMAGE_PROMPT_REVIEW_TIMED_OUT");
-const SCENE_READY_TITLE_PREFIX = "Scene ready - ";
 
 class TimeoutError extends Error {
   constructor(ms: number) {
@@ -2827,76 +2825,12 @@ export function GameSurface({
   const applySceneResultRef = useRef<((result: import("@marinara-engine/shared").SceneAnalysis) => void | Promise<void>) | null>(
     null,
   );
-  const pendingSceneReadyNotificationMsgIdRef = useRef<string | null>(null);
-  const notifiedSceneReadyMsgIdsRef = useRef<Set<string>>(new Set());
-  const sceneReadyOriginalTitleRef = useRef<string | null>(null);
   const [sceneReadyTick, setSceneReadyTick] = useState(0);
   void sceneReadyTick; // used only to trigger re-renders
 
-  const markSceneReady = useCallback((messageId: string, options?: { notify?: boolean }) => {
+  const markSceneReady = useCallback((messageId: string) => {
     sceneReadyMsgIdRef.current = messageId;
     setSceneReadyTick((t) => t + 1);
-
-    const isPendingNotification = pendingSceneReadyNotificationMsgIdRef.current === messageId;
-    if (isPendingNotification) {
-      pendingSceneReadyNotificationMsgIdRef.current = null;
-    }
-
-    if (!options?.notify || !isPendingNotification) {
-      return;
-    }
-    if (notifiedSceneReadyMsgIdsRef.current.has(messageId)) {
-      return;
-    }
-    notifiedSceneReadyMsgIdsRef.current.add(messageId);
-
-    toast.success("Scene ready.", { description: "Preparation finished. You can continue the game.", duration: 6000 });
-    if (useUIStore.getState().rpNotificationSound) {
-      playNotificationPing();
-    }
-
-    if (document.visibilityState === "hidden") {
-      if (sceneReadyOriginalTitleRef.current == null) {
-        sceneReadyOriginalTitleRef.current = document.title;
-      }
-      document.title = `${SCENE_READY_TITLE_PREFIX}${sceneReadyOriginalTitleRef.current}`;
-    }
-
-    if ("Notification" in window && Notification.permission === "granted") {
-      const notification = new Notification("Scene ready", {
-        body: "Scene preparation finished. Marinara is ready when you are.",
-        tag: `marinara-scene-ready-${activeChatId}`,
-      });
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
-    }
-  }, [activeChatId]);
-
-  useEffect(() => {
-    pendingSceneReadyNotificationMsgIdRef.current = null;
-    notifiedSceneReadyMsgIdsRef.current.clear();
-  }, [activeChatId]);
-
-  useEffect(() => {
-    const restoreSceneReadyTitle = () => {
-      if (document.visibilityState !== "visible" || sceneReadyOriginalTitleRef.current == null) {
-        return;
-      }
-      document.title = sceneReadyOriginalTitleRef.current;
-      sceneReadyOriginalTitleRef.current = null;
-    };
-    document.addEventListener("visibilitychange", restoreSceneReadyTitle);
-    window.addEventListener("focus", restoreSceneReadyTitle);
-    return () => {
-      document.removeEventListener("visibilitychange", restoreSceneReadyTitle);
-      window.removeEventListener("focus", restoreSceneReadyTitle);
-      if (sceneReadyOriginalTitleRef.current != null) {
-        document.title = sceneReadyOriginalTitleRef.current;
-        sceneReadyOriginalTitleRef.current = null;
-      }
-    };
   }, []);
 
   // On first render, mark existing messages as scene-ready (avoid false loading).
@@ -3546,8 +3480,6 @@ export function GameSurface({
     }
 
     console.warn("[scene-wrapup] path:", useSidecar ? "sidecar" : sceneConnId ? "connection" : "inline-only");
-    pendingSceneReadyNotificationMsgIdRef.current = useSidecar || sceneConnId ? msg.id : null;
-
     // Only send assets the LLM actually picks from: backgrounds (capped 50) and SFX (capped 50).
     // Music and ambient are handled by deterministic server-side scoring — not sent.
     const assetKeys = Object.keys(assets ?? {});
@@ -3742,7 +3674,7 @@ export function GameSurface({
       }
     }
     // Scene effects are applied — ungate narration
-    markSceneReady(msg.id, { notify: true });
+    markSceneReady(msg.id);
   }
 
   const installGeneratedIllustration = useCallback(
@@ -4068,7 +4000,7 @@ export function GameSurface({
     }
 
     // Scene effects are applied — ungate narration (no pending assets)
-    markSceneReady(msg.id, { notify: true });
+    markSceneReady(msg.id);
   }
 
   // Keep ref up-to-date so retry button can call it
@@ -6209,8 +6141,10 @@ export function GameSurface({
   const handleChoiceSelect = useCallback(
     (choice: string) => {
       if (!sessionInteractive) return;
+      const selectedChoice = choice.trim().replace(/\s+/g, " ");
+      if (!selectedChoice) return;
       setActiveChoices(null);
-      sendMessage(choice);
+      sendMessage(`[choice: ${selectedChoice}]`);
     },
     [sendMessage, sessionInteractive],
   );
