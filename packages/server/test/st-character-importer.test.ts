@@ -2,20 +2,37 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "../src/db/migrate.js";
 import type { DB } from "../src/db/connection.js";
+import { createCharactersStorage } from "../src/services/storage/characters.storage.js";
 import { createLorebooksStorage } from "../src/services/storage/lorebooks.storage.js";
 import { importSTCharacter } from "../src/services/import/st-character.importer.js";
 
 async function createTestDb() {
-  const client = createClient({ url: "file::memory:" });
+  const root = mkdtempSync(join(tmpdir(), "marinara-st-character-import-"));
+  const dbPath = join(root, "test.db").replace(/\\/g, "/");
+  const client = createClient({ url: `file:${dbPath}` });
   const db = drizzle(client) as unknown as DB;
   await runMigrations(db);
-  return { client, db };
+  return {
+    client,
+    db,
+    cleanup() {
+      client.close();
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {
+        // libSQL can briefly hold SQLite files open on Windows after close().
+      }
+    },
+  };
 }
 
 test("embedded SillyTavern character books preserve entry titles and settings", async () => {
-  const { client, db } = await createTestDb();
+  const { db, cleanup } = await createTestDb();
 
   try {
     const result = await importSTCharacter(
@@ -126,6 +143,160 @@ test("embedded SillyTavern character books preserve entry titles and settings", 
     assert.equal(entry.preventRecursion, true);
     assert.equal(entry.locked, true);
   } finally {
-    client.close();
+    cleanup();
+  }
+});
+
+test("embedded character books use name when comment is blank", async () => {
+  const { db, cleanup } = await createTestDb();
+
+  try {
+    const result = await importSTCharacter(
+      {
+        spec: "chara_card_v2",
+        spec_version: "2.0",
+        data: {
+          name: "Lumen",
+          description: "A test character",
+          personality: "",
+          scenario: "",
+          first_mes: "Hello.",
+          mes_example: "",
+          creator_notes: "",
+          system_prompt: "",
+          post_history_instructions: "",
+          tags: [],
+          creator: "",
+          character_version: "",
+          alternate_greetings: [],
+          extensions: {},
+          character_book: {
+            name: "Embedded Book",
+            entries: [
+              {
+                name: "Celestials",
+                comment: "",
+                keys: ["celestial"],
+                content: "Celestials are rare beings of pure energy.",
+                extensions: {},
+                enabled: true,
+                case_sensitive: false,
+                insertion_order: 0,
+                priority: 0,
+                selective: false,
+                secondary_keys: [],
+                constant: false,
+                position: "after_char",
+              },
+            ],
+          },
+        },
+      },
+      db,
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.embeddedLorebook.imported, true);
+
+    const storage = createLorebooksStorage(db);
+    const entries = await storage.listEntries(result.lorebook?.lorebookId ?? "");
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.name, "Celestials");
+
+    const characterStorage = createCharactersStorage(db);
+    const character = await characterStorage.getById(result.characterId ?? "");
+    assert.ok(character);
+    const charData = JSON.parse(character.data);
+    assert.equal(charData.character_book.entries[0].name, "Celestials");
+    assert.equal(charData.character_book.entries[0].comment, "Celestials");
+  } finally {
+    cleanup();
+  }
+});
+
+test("V3 cards prefer wrapper character_book when data copy lost entry names", async () => {
+  const { db, cleanup } = await createTestDb();
+
+  try {
+    const result = await importSTCharacter(
+      {
+        spec: "chara_card_v3",
+        spec_version: "3.0",
+        name: "Hero's party",
+        character_book: {
+          name: "The world of Lyozes",
+          entries: [
+            {
+              entry_id: "1",
+              keys: ["Celestials", "energy", "graveyard", "mana"],
+              content: "Celestials are rare beings of pure energy.",
+              extensions: {},
+              enabled: true,
+              case_sensitive: false,
+              insertion_order: 0,
+              name: "Celestials",
+              priority: 0,
+              comment: "",
+              selective: false,
+              secondary_keys: [],
+              constant: false,
+              position: "after_char",
+            },
+          ],
+        },
+        data: {
+          name: "Hero's party",
+          description: "A test character",
+          personality: "",
+          scenario: "",
+          first_mes: "Hello.",
+          mes_example: "",
+          creator_notes: "",
+          system_prompt: "",
+          post_history_instructions: "",
+          tags: [],
+          creator: "",
+          character_version: "",
+          alternate_greetings: [],
+          extensions: {},
+          character_book: {
+            name: "The world of Lyozes",
+            entries: [
+              {
+                id: 0,
+                keys: ["Celestials", "energy", "graveyard", "mana"],
+                secondary_keys: [],
+                comment: "",
+                content: "Celestials are rare beings of pure energy.",
+                constant: false,
+                selective: false,
+                insertion_order: 0,
+                enabled: true,
+                position: "after_char",
+                extensions: {},
+              },
+            ],
+          },
+        },
+      },
+      db,
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.embeddedLorebook.imported, true);
+
+    const lorebookStorage = createLorebooksStorage(db);
+    const entries = await lorebookStorage.listEntries(result.lorebook?.lorebookId ?? "");
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.name, "Celestials");
+
+    const characterStorage = createCharactersStorage(db);
+    const character = await characterStorage.getById(result.characterId ?? "");
+    assert.ok(character);
+    const charData = JSON.parse(character.data);
+    assert.equal(charData.character_book.entries[0].name, "Celestials");
+    assert.equal(charData.character_book.entries[0].comment, "Celestials");
+  } finally {
+    cleanup();
   }
 });

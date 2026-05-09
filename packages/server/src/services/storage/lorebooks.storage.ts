@@ -142,7 +142,12 @@ async function hydrateLorebookRows(db: DB, rows: LorebookRow[]) {
   );
 }
 
-async function syncLorebookLinks(db: DB, lorebookId: string, characterIds: string[], personaIds: string[]) {
+async function syncLorebookLinks(
+  db: Pick<DB, "delete" | "insert">,
+  lorebookId: string,
+  characterIds: string[],
+  personaIds: string[],
+) {
   const timestamp = now();
   await db.delete(lorebookCharacterLinks).where(eq(lorebookCharacterLinks.lorebookId, lorebookId));
   await db.delete(lorebookPersonaLinks).where(eq(lorebookPersonaLinks.lorebookId, lorebookId));
