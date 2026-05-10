@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { logger } from "../../lib/logger.js";
-import { join } from "path";
+import { basename, join } from "path";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import { generateImage, type ImageGenResult } from "../image/image-generation.js";
 import { buildAssetManifest, GAME_ASSETS_DIR } from "./asset-manifest.service.js";
@@ -19,6 +19,8 @@ import type { ImageGenerationDefaultsProfile } from "@marinara-engine/shared";
 import type { ImageGenerationSize } from "../image/image-generation-settings.js";
 
 const NPC_AVATAR_DIR = join(DATA_DIR, "avatars", "npc");
+const CHAT_BACKGROUND_DIR = join(DATA_DIR, "backgrounds");
+const CHAT_BACKGROUND_META_PATH = join(CHAT_BACKGROUND_DIR, "meta.json");
 export const DEFAULT_GAME_BACKGROUND_SIZE: ImageGenerationSize = { width: 1024, height: 576 };
 export const DEFAULT_GAME_PORTRAIT_SIZE: ImageGenerationSize = { width: 512, height: 512 };
 export const GENERATED_GAME_BACKGROUND_EXTS = ["png", "jpg", "jpeg", "webp", "avif", "gif"] as const;
@@ -57,6 +59,8 @@ type GameBackgroundImage = {
   buffer: Buffer;
   ext: string;
 };
+
+type ChatBackgroundMeta = Record<string, { originalName?: string; tags: string[] }>;
 
 /** Return the extension implied by known image file signatures. */
 function detectImageExt(buffer: Buffer): string | null {
@@ -127,6 +131,31 @@ function existingGeneratedBackgroundPath(targetDir: string, slug: string): strin
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+function readChatBackgroundMeta(): ChatBackgroundMeta {
+  if (!existsSync(CHAT_BACKGROUND_META_PATH)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(CHAT_BACKGROUND_META_PATH, "utf-8"));
+    return parsed && typeof parsed === "object" ? (parsed as ChatBackgroundMeta) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeChatBackgroundMeta(meta: ChatBackgroundMeta): void {
+  if (!existsSync(CHAT_BACKGROUND_DIR)) mkdirSync(CHAT_BACKGROUND_DIR, { recursive: true });
+  writeFileSync(CHAT_BACKGROUND_META_PATH, JSON.stringify(meta, null, 2), "utf-8");
+}
+
+function chatBackgroundTags(req: ChatBackgroundGenRequest, slug: string): string[] {
+  const tags = new Set<string>(["generated", "roleplay", slug.replace(/-/g, " ")]);
+  for (const value of [req.locationSlug, req.reason]) {
+    if (!value) continue;
+    const clean = value.trim().replace(/\s+/g, " ");
+    if (clean) tags.add(clean.slice(0, 80));
+  }
+  return Array.from(tags).filter(Boolean);
 }
 
 export function readAvatarBase64(avatarPath: string | null | undefined): string | undefined {
@@ -327,6 +356,11 @@ export interface BackgroundGenRequest {
   promptOverride?: string;
 }
 
+export interface ChatBackgroundGenRequest extends BackgroundGenRequest {
+  /** Why the background agent asked for generation. Stored as background metadata. */
+  reason?: string;
+}
+
 export interface SceneIllustrationGenRequest {
   chatId: string;
   prompt: string;
@@ -462,6 +496,76 @@ export async function generateBackground(req: BackgroundGenRequest): Promise<str
     return tag;
   } catch (err) {
     logger.warn(err, '[game-asset-gen] Failed to generate background "%s"', slug);
+    return null;
+  }
+}
+
+/**
+ * Generate a reusable Roleplay chat background and save it into the normal
+ * user backgrounds folder so the Background agent can select it on later turns.
+ * Returns the saved filename on success, or null on failure.
+ */
+export async function generateChatBackground(req: ChatBackgroundGenRequest): Promise<string | null> {
+  const baseSlug = safeName(req.locationSlug || req.sceneDescription.slice(0, 80));
+  if (!baseSlug) return null;
+
+  const slug = `generated-${baseSlug}`;
+  if (!existsSync(CHAT_BACKGROUND_DIR)) mkdirSync(CHAT_BACKGROUND_DIR, { recursive: true });
+
+  const existingPath = existingGeneratedBackgroundPath(CHAT_BACKGROUND_DIR, slug);
+  if (existingPath) return basename(existingPath);
+
+  const prompt = await buildBackgroundImagePrompt(req);
+  const size = resolvedSize(req.size, DEFAULT_GAME_BACKGROUND_SIZE);
+  req.debugLog?.(
+    "[debug/background-agent/image-generation] request slug=%s model=%s source=%s targetSize=%dx%d prompt:\n%s",
+    slug,
+    req.imgModel,
+    req.imgSource || req.imgService || "",
+    size.width,
+    size.height,
+    prompt,
+  );
+
+  try {
+    const result = await generateImage(
+      req.imgModel,
+      req.imgBaseUrl,
+      req.imgApiKey,
+      req.imgSource || req.imgService || "",
+      {
+        prompt,
+        negativePrompt: GAME_BACKGROUND_NEGATIVE_PROMPT,
+        model: req.imgModel,
+        width: size.width,
+        height: size.height,
+        comfyWorkflow: req.imgComfyWorkflow || undefined,
+        imageDefaults: req.imgDefaults ?? undefined,
+      },
+    );
+
+    const image = await gameBackgroundImage(result, size);
+    const filename = `${slug}.${image.ext}`;
+    writeFileSync(join(CHAT_BACKGROUND_DIR, filename), image.buffer);
+
+    const meta = readChatBackgroundMeta();
+    meta[filename] = {
+      originalName: `Generated: ${req.locationSlug || baseSlug}`,
+      tags: chatBackgroundTags(req, baseSlug),
+    };
+    writeChatBackgroundMeta(meta);
+
+    buildAssetManifest();
+    logger.info('[background-agent] Generated roleplay background "%s"', filename);
+    req.debugLog?.(
+      "[debug/background-agent/image-generation] result slug=%s bytes=%d filename=%s",
+      slug,
+      image.buffer.byteLength,
+      filename,
+    );
+    return filename;
+  } catch (err) {
+    logger.warn(err, '[background-agent] Failed to generate roleplay background "%s"', slug);
     return null;
   }
 }

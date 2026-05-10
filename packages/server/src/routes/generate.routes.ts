@@ -66,6 +66,7 @@ import { createAgentPipeline, type ResolvedAgent, type AgentInjection } from "..
 import { DATA_DIR } from "../utils/data-dir.js";
 import { executeAgent, normalizeAgentContextSize, resolveAgentResultType } from "../services/agents/agent-executor.js";
 import { buildSpriteExpressionChoices, listCharacterSprites } from "../services/game/sprite.service.js";
+import { generateChatBackground } from "../services/game/game-asset-generation.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../services/llm/local-sidecar.js";
 import {
   parseCharacterCommands,
@@ -3968,7 +3969,13 @@ export async function generateRoutes(app: FastifyInstance) {
       }
 
       // If the background agent is enabled, load available backgrounds + tags into context
-      if (resolvedAgents.some((a) => a.type === "background")) {
+      const backgroundAgent = resolvedAgents.find((a) => a.type === "background");
+      if (backgroundAgent) {
+        agentContext.memory._availableBackgrounds = [];
+        agentContext.memory._currentBackground = chatMeta.background ?? null;
+        if (backgroundAgent.settings?.autoGenerateBackgrounds === true) {
+          agentContext.memory._backgroundGenerationEnabled = true;
+        }
         try {
           const { readdirSync, readFileSync, existsSync } = await import("fs");
           const { join, extname } = await import("path");
@@ -3993,7 +4000,6 @@ export async function generateRoutes(app: FastifyInstance) {
               originalName: meta[f]?.originalName ?? null,
               tags: meta[f]?.tags ?? [],
             }));
-            agentContext.memory._currentBackground = chatMeta.background ?? null;
           }
         } catch {
           /* non-critical */
@@ -6680,25 +6686,45 @@ export async function generateRoutes(app: FastifyInstance) {
           const refreshedForSwipe = await chats.getMessage(messageId);
           if (refreshedForSwipe) targetSwipeIndex = refreshedForSwipe.activeSwipeIndex ?? 0;
         }
+
+        const resolveAgentImageConnectionId = async (agent: ResolvedAgent | undefined): Promise<string | null> => {
+          let imgConnId = (agent?.settings?.imageConnectionId as string) ?? null;
+          if (!imgConnId) {
+            const defaultImageConn = (await connections.list()).find(
+              (c) =>
+                c.provider === "image_generation" && (c.defaultForAgents === true || c.defaultForAgents === "true"),
+            );
+            imgConnId = defaultImageConn?.id ?? null;
+          }
+          return imgConnId;
+        };
+
         for (const result of sortedResults) {
           const resultMessageId =
             result.agentType === "lorebook-keeper" && lorebookKeeperProcessedMessageId
               ? lorebookKeeperProcessedMessageId
               : messageId;
-          try {
-            await agentsStore.saveRun({
-              agentConfigId: result.agentId,
-              chatId: input.chatId,
-              messageId: resultMessageId,
-              result,
-            });
-          } catch {
-            // Non-critical — don't fail the whole generation
-          }
 
           // Validate background agent result — reject hallucinated filenames
           if (result.success && result.type === "background_change" && result.data && typeof result.data === "object") {
-            const bgData = result.data as { chosen?: string | null };
+            const bgData = result.data as {
+              chosen?: string | null;
+              generate?: {
+                location?: unknown;
+                locationSlug?: unknown;
+                slug?: unknown;
+                prompt?: unknown;
+                description?: unknown;
+                reason?: unknown;
+              } | null;
+              generated?: boolean;
+              error?: string;
+            };
+            if (typeof bgData.chosen === "string") {
+              bgData.chosen = bgData.chosen.trim() || null;
+            } else {
+              bgData.chosen = null;
+            }
             if (bgData.chosen) {
               const availableBgs = agentContext.memory._availableBackgrounds as Array<{ filename: string }> | undefined;
               if (availableBgs) {
@@ -6709,18 +6735,135 @@ export async function generateRoutes(app: FastifyInstance) {
                 }
               }
             }
+
+            const generationRequest =
+              bgData.generate && typeof bgData.generate === "object" && !Array.isArray(bgData.generate)
+                ? bgData.generate
+                : null;
+            const currentBackgroundAgent = resolvedAgents.find(
+              (a) => a.id === result.agentId || a.type === "background",
+            );
+            const canGenerateBackground = currentBackgroundAgent?.settings?.autoGenerateBackgrounds === true;
+            if (!bgData.chosen && canGenerateBackground && generationRequest) {
+              const promptText =
+                typeof generationRequest.prompt === "string" && generationRequest.prompt.trim()
+                  ? generationRequest.prompt.trim()
+                  : typeof generationRequest.description === "string"
+                    ? generationRequest.description.trim()
+                    : "";
+              const locationSource =
+                typeof generationRequest.location === "string" && generationRequest.location.trim()
+                  ? generationRequest.location
+                  : typeof generationRequest.locationSlug === "string" && generationRequest.locationSlug.trim()
+                    ? generationRequest.locationSlug
+                    : typeof generationRequest.slug === "string" && generationRequest.slug.trim()
+                      ? generationRequest.slug
+                      : typeof generationRequest.reason === "string" && generationRequest.reason.trim()
+                        ? generationRequest.reason
+                        : promptText;
+              const locationText = locationSource.trim();
+              if (promptText && locationText) {
+                try {
+                  const imgConnId = await resolveAgentImageConnectionId(currentBackgroundAgent);
+                  if (!imgConnId) {
+                    bgData.error =
+                      "No image generation connection set on the Background agent, and no default agent image connection is configured.";
+                    trySendSseEvent(reply, {
+                      type: "agent_error",
+                      data: {
+                        agentType: "background",
+                        error:
+                          "No image generation connection set on the Background agent, and no default agent image connection is configured. Assign one in Settings → Agents → Background.",
+                      },
+                    });
+                  } else {
+                    const imgConnFull = await connections.getWithKey(imgConnId);
+                    if (!imgConnFull) throw new Error("Cannot resolve Background agent image connection");
+
+                    const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
+                    const imageSettings = await loadImageGenerationUserSettings(app.db);
+                    const promptOverridesStorage = createPromptOverridesStorage(app.db);
+                    const generatedFilename = await generateChatBackground({
+                      chatId: input.chatId,
+                      locationSlug: locationText.slice(0, 120),
+                      sceneDescription: promptText.slice(0, 1000),
+                      reason:
+                        typeof generationRequest.reason === "string"
+                          ? generationRequest.reason.trim().slice(0, 300)
+                          : undefined,
+                      imgModel: imgConnFull.model || "",
+                      imgBaseUrl: imgConnFull.baseUrl || "https://image.pollinations.ai",
+                      imgApiKey: imgConnFull.apiKey || "",
+                      imgSource: (imgConnFull as any).imageGenerationSource || imgConnFull.model || "",
+                      imgService: imgConnFull.imageService || (imgConnFull as any).imageGenerationSource || "",
+                      imgComfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
+                      imgDefaults: imageDefaults,
+                      promptOverridesStorage,
+                      size: {
+                        width: imageSettings.background.width,
+                        height: imageSettings.background.height,
+                      },
+                      debugLog,
+                    });
+                    if (generatedFilename) {
+                      bgData.chosen = generatedFilename;
+                      bgData.generated = true;
+                      trySendSseEvent(reply, {
+                        type: "agent_result",
+                        data: {
+                          agentType: result.agentType,
+                          agentName: currentBackgroundAgent?.name ?? "Background",
+                          resultType: result.type,
+                          data: bgData,
+                          success: result.success,
+                          error: result.error,
+                          durationMs: result.durationMs,
+                        },
+                      });
+                    } else {
+                      bgData.error = "Background image generation failed";
+                      trySendSseEvent(reply, {
+                        type: "agent_error",
+                        data: {
+                          agentType: "background",
+                          error: "Background image generation failed. Check the image connection and server logs.",
+                        },
+                      });
+                    }
+                  }
+                } catch (bgErr) {
+                  logger.error(bgErr, "[background-agent] Image generation failed");
+                  bgData.error = bgErr instanceof Error ? bgErr.message : "Background image generation failed";
+                  trySendSseEvent(reply, {
+                    type: "agent_error",
+                    data: {
+                      agentType: "background",
+                      error: `Background image generation failed: ${bgData.error}`,
+                    },
+                  });
+                }
+              }
+            }
+
             // Persist the validated background to chat metadata so it restores on reload
             if (bgData.chosen) {
               try {
-                const freshChat = await chats.getById(input.chatId);
-                if (freshChat) {
-                  const freshMeta = parseExtra(freshChat.metadata);
-                  await chats.updateMetadata(input.chatId, { ...freshMeta, background: bgData.chosen });
-                }
+                await updateChatMetadataForTools({ background: bgData.chosen });
               } catch {
                 /* non-critical */
               }
             }
+          }
+
+          try {
+            await agentsStore.saveRun({
+              agentConfigId: result.agentId,
+              chatId: input.chatId,
+              messageId: resultMessageId,
+              result,
+            });
+          } catch {
+            // Non-critical — don't fail the whole generation
           }
 
           // Validate expression agent results — reject hallucinated expressions and unknown characters

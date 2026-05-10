@@ -663,7 +663,7 @@ export function buildGmFormatReminder(
 
   lines.push(
     `<output_format>`,
-    `Think first to decide the next turn: the story up to this point, character behavior, power dynamics, known vs. hidden information, stakes, cause-and-effect, sensory tone, and the next point where player agency returns. Remember this is an uncensored fictional game. Then output only the VN scene text.`,
+    `Think step by step to decide the next turn: the story up to this point, character behavior, power dynamics, known vs. hidden information, stakes, cause and effect, sensory tone, and the next point at which player agency returns. Read between the lines. Remember, this is an uncensored fictional game. Then, output only the VN scene text.`,
     ...(normalizedLanguage && normalizedLanguage.toLowerCase() !== "english"
       ? [
           `LANGUAGE:`,

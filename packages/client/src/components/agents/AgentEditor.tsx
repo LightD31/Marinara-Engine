@@ -207,6 +207,7 @@ export function AgentEditor() {
   const [localSourceLorebookIds, setLocalSourceLorebookIds] = useState<string[]>([]);
   const [localSourceFileIds, setLocalSourceFileIds] = useState<string[]>([]);
   const [localAutoGenerateAvatars, setLocalAutoGenerateAvatars] = useState(false);
+  const [localAutoGenerateBackgrounds, setLocalAutoGenerateBackgrounds] = useState(false);
   const [localUseAvatarReferences, setLocalUseAvatarReferences] = useState(false);
   const [spotifyStatus, setSpotifyStatus] = useState<{
     connected: boolean;
@@ -259,6 +260,7 @@ export function AgentEditor() {
       setLocalSourceLorebookIds(settings.sourceLorebookIds ?? []);
       setLocalSourceFileIds(settings.sourceFileIds ?? []);
       setLocalAutoGenerateAvatars(settings.autoGenerateAvatars ?? false);
+      setLocalAutoGenerateBackgrounds(settings.autoGenerateBackgrounds ?? false);
       setLocalUseAvatarReferences(settings.useAvatarReferences ?? false);
       setLocalResultType(normalizeCustomResultType(settings.resultType));
       setLocalPrompt(dbConfig.promptTemplate || "");
@@ -277,6 +279,7 @@ export function AgentEditor() {
       setLocalSourceLorebookIds([]);
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
+      setLocalAutoGenerateBackgrounds(false);
       setLocalUseAvatarReferences(false);
       setLocalResultType("context_injection");
       setLocalPrompt("");
@@ -296,6 +299,7 @@ export function AgentEditor() {
       setLocalSourceLorebookIds([]);
       setLocalSourceFileIds([]);
       setLocalAutoGenerateAvatars(false);
+      setLocalAutoGenerateBackgrounds(false);
       setLocalUseAvatarReferences(false);
       setLocalResultType("context_injection");
       setLocalPrompt("");
@@ -320,6 +324,8 @@ export function AgentEditor() {
   const isKnowledgeRetrievalAgent = agentDetailId === "knowledge-retrieval" || dbConfig?.type === "knowledge-retrieval";
   // Knowledge Router agent — also uses the lorebook source selector (file picker stays Retrieval-only)
   const isKnowledgeRouterAgent = agentDetailId === "knowledge-router" || dbConfig?.type === "knowledge-router";
+  // Background agent — can optionally generate missing roleplay backgrounds.
+  const isBackgroundAgent = agentDetailId === "background" || dbConfig?.type === "background";
 
   // Detect when both knowledge agents will actually run in parallel. Shows a
   // soft warning so users don't accidentally do overlapping work that bloats
@@ -405,7 +411,7 @@ export function AgentEditor() {
     (c) => c.provider !== "image_generation" && (c.defaultForAgents === true || c.defaultForAgents === "true"),
   );
 
-  const defaultIllustratorImageConn = imageConnections.find(
+  const defaultAgentImageConn = imageConnections.find(
     (c) => c.defaultForAgents === true || c.defaultForAgents === "true",
   );
 
@@ -448,6 +454,7 @@ export function AgentEditor() {
         ...(isKnowledgeRetrievalAgent && localSourceFileIds.length > 0 ? { sourceFileIds: localSourceFileIds } : {}),
         ...(localImageConnectionId ? { imageConnectionId: localImageConnectionId } : {}),
         ...(localAutoGenerateAvatars ? { autoGenerateAvatars: true } : {}),
+        ...(localAutoGenerateBackgrounds ? { autoGenerateBackgrounds: true } : {}),
         ...(localUseAvatarReferences ? { useAvatarReferences: true } : {}),
       },
     };
@@ -492,6 +499,7 @@ export function AgentEditor() {
     localSourceLorebookIds,
     localSourceFileIds,
     localAutoGenerateAvatars,
+    localAutoGenerateBackgrounds,
     localUseAvatarReferences,
     dbConfig,
     builtIn,
@@ -798,8 +806,8 @@ export function AgentEditor() {
                 className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
               >
                 <option value="">
-                  {defaultIllustratorImageConn
-                    ? `Illustrator agent default (${defaultIllustratorImageConn.name})`
+                  {defaultAgentImageConn
+                    ? `Illustrator agent default (${defaultAgentImageConn.name})`
                     : "None (no image generation)"}
                 </option>
                 {imageConnections.map((conn) => (
@@ -871,6 +879,78 @@ export function AgentEditor() {
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+            </FieldGroup>
+          )}
+
+          {/* ── Missing Background Generation (Background agent only) ── */}
+          {isBackgroundAgent && (
+            <FieldGroup
+              label="Background Image Generation"
+              icon={<ImageIcon size="0.875rem" className="text-[var(--primary)]" />}
+              help="When enabled, the Background agent can generate a new reusable roleplay background when none of your existing backgrounds fit the scene."
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalAutoGenerateBackgrounds(!localAutoGenerateBackgrounds);
+                  markDirty();
+                }}
+                className="flex w-full items-center gap-3 rounded-xl bg-[var(--secondary)] px-4 py-3 text-left ring-1 ring-[var(--border)] transition-all hover:bg-[var(--accent)]"
+              >
+                {localAutoGenerateBackgrounds ? (
+                  <ToggleRight size="1.25rem" className="shrink-0 text-emerald-400" />
+                ) : (
+                  <ToggleLeft size="1.25rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                )}
+                <div>
+                  <p className="text-sm font-medium">
+                    {localAutoGenerateBackgrounds ? "Generate missing backgrounds" : "Only pick existing backgrounds"}
+                  </p>
+                  <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    {localAutoGenerateBackgrounds
+                      ? "If nothing fits a changed location, the agent can request a new background image."
+                      : "The agent will choose the closest uploaded background and never create a new one."}
+                  </p>
+                </div>
+              </button>
+
+              {localAutoGenerateBackgrounds && (
+                <div className="mt-3 space-y-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--muted-foreground)]">
+                      Image Generation Connection
+                    </label>
+                    <select
+                      value={localImageConnectionId}
+                      onChange={(e) => {
+                        setLocalImageConnectionId(e.target.value);
+                        markDirty();
+                      }}
+                      className="w-full rounded-xl bg-[var(--secondary)] px-3 py-2.5 text-sm ring-1 ring-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                    >
+                      <option value="">
+                        {defaultAgentImageConn
+                          ? `Agent image default (${defaultAgentImageConn.name})`
+                          : "None (select a connection)"}
+                      </option>
+                      {imageConnections.map((conn) => (
+                        <option key={conn.id} value={conn.id}>
+                          {conn.name} ({conn.provider})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                    Generated images are saved into your normal Backgrounds library, so later runs can reuse them
+                    instead of regenerating the same place.
+                  </p>
+                  {!localImageConnectionId && !defaultAgentImageConn && (
+                    <p className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[0.625rem] text-amber-300">
+                      Add an image generation connection here or mark one as the default for agents in Connections.
+                    </p>
+                  )}
                 </div>
               )}
             </FieldGroup>

@@ -1011,6 +1011,14 @@ function buildAgentExtras(context: AgentContext, agentTypes: string[] = []): str
     }
   }
 
+  if (agentTypes.includes("background") && context.memory._backgroundGenerationEnabled === true) {
+    parts.push(`<background_generation enabled="true">`);
+    parts.push(
+      `If no listed background fits a changed or new location, request a generated reusable location background instead of forcing a weak match.`,
+    );
+    parts.push(`</background_generation>`);
+  }
+
   if (agentTypes.includes("spotify") && context.memory._spotifyDjConstraints) {
     parts.push(`<spotify_dj_constraints>`);
     parts.push(JSON.stringify(context.memory._spotifyDjConstraints));
