@@ -12,6 +12,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Fixed Game mode image prompt review so prompt review modals can appear during first-start asset generation instead of suppressing the review flow.
 - Fixed Linux NVIDIA local-runtime setup in Docker by falling back to the official Vulkan/CPU llama.cpp builds when Linux CUDA release assets are unavailable.
 - Fixed GLM 5.1 via NanoGPT returning thinking-only text in Professor Mari chats by explicitly disabling thinking when reasoning is off and refusing to expose GLM thinking as visible chat output.
+- Fixed app settings reverting after reload when stale server-synced settings overwrote newer browser-local preferences.
 
 ## [1.5.9]
 
