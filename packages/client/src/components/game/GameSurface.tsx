@@ -2166,6 +2166,12 @@ export function GameSurface({
     setActiveReadable(null);
     readableQueueRef.current = [];
     appliedInventorySegmentsRef.current = new Set();
+    startGameGuardRef.current = false;
+    startSessionGuardRef.current = false;
+    setStartGameRequested(false);
+    setStartSessionRequested(false);
+    setPrepareInitialWidgetsOpen(false);
+    setPrepareSessionWidgetsOpen(false);
     // Allow the auto-tutorial to re-evaluate for the new chat (guard still gates on disabled flag)
     tutorialAutoTriggeredRef.current = false;
   }, [activeChatId, chatMeta.gameInventory, chatMeta.gameRecentMusic]);
@@ -4431,6 +4437,15 @@ export function GameSurface({
   const updateMessage = useUpdateMessage(activeChatId);
   const startSessionLocked = startSession.isPending || startSessionRequested;
   const gameId = (chatMeta.gameId as string) || null;
+  const startGameResetRef = useRef(startGame.reset);
+  const startSessionResetRef = useRef(startSession.reset);
+  startGameResetRef.current = startGame.reset;
+  startSessionResetRef.current = startSession.reset;
+
+  useEffect(() => {
+    startGameResetRef.current();
+    startSessionResetRef.current();
+  }, [activeChatId]);
 
   const handleStartGameNow = useCallback(() => {
     if (startGame.isPending || startGameRequested || startGameGuardRef.current) return;
