@@ -4437,12 +4437,18 @@ export function GameSurface({
   const updateMessage = useUpdateMessage(activeChatId);
   const startSessionLocked = startSession.isPending || startSessionRequested;
   const gameId = (chatMeta.gameId as string) || null;
+  const createGameResetRef = useRef(createGame.reset);
+  const gameSetupResetRef = useRef(gameSetup.reset);
   const startGameResetRef = useRef(startGame.reset);
   const startSessionResetRef = useRef(startSession.reset);
+  createGameResetRef.current = createGame.reset;
+  gameSetupResetRef.current = gameSetup.reset;
   startGameResetRef.current = startGame.reset;
   startSessionResetRef.current = startSession.reset;
 
   useEffect(() => {
+    createGameResetRef.current();
+    gameSetupResetRef.current();
     startGameResetRef.current();
     startSessionResetRef.current();
   }, [activeChatId]);
@@ -4463,6 +4469,7 @@ export function GameSurface({
         onError: (err) => {
           startGameGuardRef.current = false;
           setStartGameRequested(false);
+          toast.error(err instanceof Error ? err.message : "Failed to start game.");
           console.error("[GameSurface] startGame failed:", err);
         },
       },
