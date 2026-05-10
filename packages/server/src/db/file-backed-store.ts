@@ -302,14 +302,16 @@ function flushFile(path: string) {
 
 function looksNulFilled(path: string): boolean {
   // Cheap heuristic: a hard-crash-corrupted file shows up as NUL bytes from
-  // byte 0. JSON tables/manifests always start with a printable character
-  // ([ or {), so a leading NUL means the file is unusable as a backup source.
+  // byte 0, or as 0 length if the truncate landed but no writes flushed.
+  // JSON tables/manifests always start with a printable character ([ or {),
+  // so either case means the file is unusable as a backup source.
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
     const buf = Buffer.alloc(1);
     const bytesRead = readSync(fd, buf, 0, 1, 0);
-    return bytesRead > 0 && buf[0] === 0;
+    if (bytesRead === 0) return true;
+    return buf[0] === 0;
   } catch {
     return false;
   } finally {
@@ -346,8 +348,9 @@ function atomicWriteFile(path: string, content: string) {
           /* ignore */
         }
         logger.error(
-          { err, path: bakPath },
-          "[file-storage] Failed to refresh backup durably; backup may be stale and unusable for crash recovery",
+          err,
+          "[file-storage] Failed to refresh backup durably; backup may be stale and unusable for crash recovery (path=%s)",
+          bakPath,
         );
       }
     }
@@ -395,8 +398,11 @@ function parseJsonFile<T>(path: string, fallback: T): ParseResult<T> {
     if (existsSync(backupPath)) {
       const staleness = describeStaleness(path, backupPath);
       logger.error(
-        { err, path, backupPath, backupStaleness: staleness },
-        `[file-storage] ${path} is corrupt; recovering from ${backupPath} (backup is ${staleness} older). Edits made since the backup are unrecoverable.`,
+        err,
+        "[file-storage] %s is corrupt; recovering from %s (backup is %s older). Edits made since the backup are unrecoverable.",
+        path,
+        backupPath,
+        staleness,
       );
       return {
         value: JSON.parse(readFileSync(backupPath, "utf8")) as T,
@@ -1018,8 +1024,9 @@ class FileTableStore {
       needsManifestRewrite = result.recoveredFromBackup;
     } catch (err) {
       logger.error(
-        { err, path: manifestPath(this.rootDir) },
-        "[file-storage] Manifest unparseable from primary and backup; continuing with empty manifest. A fresh one will be written on next save.",
+        err,
+        "[file-storage] Manifest unparseable from primary and backup; continuing with empty manifest. A fresh one will be written on next save. (path=%s)",
+        manifestPath(this.rootDir),
       );
       needsManifestRewrite = true;
     }
