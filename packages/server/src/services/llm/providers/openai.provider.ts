@@ -509,8 +509,12 @@ export class OpenAIProvider extends BaseLLMProvider {
   /** Check if a model requires or benefits from the Responses API instead of Chat Completions */
   private useResponsesAPI(model: string, options?: Pick<ChatOptions, "captureReasoning">): boolean {
     if (this.providerKind === "openai-chatgpt") return true;
-    if (this.isGpt55Model(model)) return true;
+    // Custom providers generally only implement /chat/completions — never force
+    // /responses for them, even for GPT-5.5. Reasoning-model parameter tweaks
+    // (max_completion_tokens, temperature suppression) still apply via
+    // isReasoningModel / isNoTemperatureModel which have their own GPT-5.5 gates.
     if (this.isGenericCustomProvider()) return false;
+    if (this.isGpt55Model(model)) return true;
     const m = model.toLowerCase();
     return (
       this.isXAIMultiAgentModel(model) ||
